@@ -1,0 +1,188 @@
+<!DOCTYPE html>
+<html lang="fa">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Advanced LLM Simulator (JS)</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            margin: 0;
+            padding: 20px;
+            background-color: #f0f0f0;
+            direction: rtl;
+            transition: all 0.3s;
+        }
+        .container {
+            max-width: 800px;
+            margin: 0 auto;
+            display: flex;
+            flex-direction: column;
+            gap: 20px;
+        }
+        .section {
+            background: white;
+            padding: 20px;
+            border-radius: 8px;
+            box-shadow: 0 2px 5px rgba(0,0,0,0.1);
+        }
+        h1, h2 {
+            margin: 0 0 10px;
+            color: #333;
+        }
+        textarea, input {
+            width: 100%;
+            padding: 10px;
+            margin: 10px 0;
+            border: 1px solid #ddd;
+            border-radius: 4px;
+            box-sizing: border-box;
+        }
+        button {
+            padding: 10px 20px;
+            background-color: #007bff;
+            color: white;
+            border: none;
+            border-radius: 4px;
+            cursor: pointer;
+        }
+        button:hover {
+            background-color: #0056b3;
+        }
+        select {
+            padding: 5px;
+            margin-bottom: 10px;
+        }
+        .response {
+            margin-top: 10px;
+            padding: 10px;
+            background-color: #e9ecef;
+            border-radius: 4px;
+        }
+        @media (min-width: 600px) {
+            .container {
+                flex-direction: row;
+            }
+            .section {
+                width: 50%;
+            }
+        }
+        [lang="en"] body {
+            direction: ltr;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="section">
+            <select id="language" onchange="changeLanguage()">
+                <option value="fa">فارسی</option>
+                <option value="en">English</option>
+            </select>
+            <h1 data-fa="آموزش مدل" data-en="Train the Model">آموزش مدل</h1>
+            <textarea id="trainInput" rows="4" 
+                placeholder-fa="سوال و جواب رو اینجا بنویس (مثال: سلام -> چطوری؟)" 
+                placeholder-en="Write question and answer here (e.g., Hi -> How are you?)"></textarea>
+            <button onclick="trainModel()" data-fa="آموزش بده" data-en="Train">آموزش بده</button>
+        </div>
+        <div class="section">
+            <h2 data-fa="پرس‌وجو" data-en="Query">پرس‌وجو</h2>
+            <input type="text" id="queryInput" 
+                placeholder-fa="سوالت رو بپرس" 
+                placeholder-en="Ask your question">
+            <button onclick="getResponse()" data-fa="بپرس" data-en="Ask">بپرس</button>
+            <div id="response" class="response" data-fa="پاسخ اینجا ظاهر می‌شه" data-en="Response will appear here"></div>
+        </div>
+    </div>
+
+    <script>
+        let knowledgeBase = JSON.parse(localStorage.getItem('knowledgeBase')) || [];
+
+        function trainModel() {
+            const input = document.getElementById('trainInput').value.trim();
+            if (!input) return;
+
+            const [question, answer] = input.split('->').map(str => str.trim());
+            if (question && answer) {
+                knowledgeBase.push({ question, answer });
+                localStorage.setItem('knowledgeBase', JSON.stringify(knowledgeBase));
+                document.getElementById('trainInput').value = '';
+                alert(getText('trainedAlert'));
+            } else {
+                alert(getText('invalidFormatAlert'));
+            }
+        }
+
+        function generateResponse(query) {
+            const matches = knowledgeBase.filter(item => 
+                item.question.toLowerCase().includes(query.toLowerCase())
+            );
+
+            if (matches.length > 0) {
+                // انتخاب رندوم از تطابق‌ها
+                const randomMatch = matches[Math.floor(Math.random() * matches.length)];
+                return randomMatch.answer;
+            } else if (knowledgeBase.length > 0) {
+                // تولید پاسخ با ترکیب
+                const lang = document.getElementById('language').value;
+                const prefixes = {
+                    fa: ['خب، فکر کنم بگم: ', 'شاید این جور باشه: ', 'یه چیزی مثل این: '],
+                    en: ['Well, I’d say: ', 'Maybe something like: ', 'How about this: ']
+                };
+                const connectors = {
+                    fa: [' و ', '، بعدش ', ' یا شاید '],
+                    en: [' and ', ', then ', ' or maybe ']
+                };
+
+                const prefix = prefixes[lang][Math.floor(Math.random() * prefixes[lang].length)];
+                const answer1 = knowledgeBase[Math.floor(Math.random() * knowledgeBase.length)].answer;
+                const answer2 = knowledgeBase[Math.floor(Math.random() * knowledgeBase.length)].answer;
+                const connector = connectors[lang][Math.floor(Math.random() * connectors[lang].length)];
+
+                return prefix + answer1 + connector + answer2;
+            } else {
+                return getText('noAnswer');
+            }
+        }
+
+        function getResponse() {
+            const query = document.getElementById('queryInput').value.trim();
+            const responseDiv = document.getElementById('response');
+            if (!query) {
+                responseDiv.innerText = getText('emptyQuery');
+                return;
+            }
+
+            responseDiv.innerText = generateResponse(query);
+        }
+
+        function changeLanguage() {
+            const lang = document.getElementById('language').value;
+            document.documentElement.lang = lang;
+            document.body.setAttribute('lang', lang);
+
+            document.querySelectorAll('[data-fa][data-en]').forEach(el => {
+                el.innerText = el.getAttribute(`data-${lang}`);
+            });
+
+            document.querySelectorAll('[placeholder-fa][placeholder-en]').forEach(el => {
+                el.placeholder = el.getAttribute(`placeholder-${lang}`);
+            });
+        }
+
+        function getText(key) {
+            const texts = {
+                trainedAlert: { fa: 'مدل آموزش دید!', en: 'Model trained!' },
+                invalidFormatAlert: { fa: 'فرمت اشتباهه! از -> استفاده کن', en: 'Invalid format! Use ->' },
+                emptyQuery: { fa: 'سوال خالیه!', en: 'Query is empty!' },
+                noAnswer: { fa: 'جوابی پیدا نشد. بیشتر آموزش بده!', en: 'No answer found. Train me more!' }
+            };
+            const lang = document.getElementById('language').value;
+            return texts[key][lang];
+        }
+
+        // تنظیم زبان اولیه
+        changeLanguage();
+    </script>
+</body>
+</html>
