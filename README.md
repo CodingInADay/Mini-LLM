@@ -4,7 +4,7 @@
 Mini Language Model A.I
 </h1>
 
-در واقع یک سیستم تک صفحه ای دو زبانه در دو حالت کلاینت ساید و سمت سرور است که قابلیت ترین Train و برگرداندن دادن پاسخ دارد.
+در واقع یک سیستم تک صفحه ای دو زبانه در دو حالت کلاینت ساید و سمت سرور است که قابلیت آموزش دیدن و برگرداندن دادن پاسخ دارد.
 <br><br>
 In fact, it is a single-page, bilingual system in both client-side and server-side modes that has the ability to train and return responses.
 <br><br>
