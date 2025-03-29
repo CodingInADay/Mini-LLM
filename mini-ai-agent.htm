@@ -1,0 +1,367 @@
+<!DOCTYPE html>
+<html lang="fa">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>دستیار هوش مصنوعی</title>
+    <link href="https://cdn.jsdelivr.net/npm/vazirmatn@33.0.3/Vazirmatn-font-face.css" rel="stylesheet">
+    <link rel="icon" href="https://cdn.sstatic.net/Sites/stackoverflow/Img/favicon.ico" type="image/x-icon">
+    <style>
+        * {
+            box-sizing: border-box;
+        }
+        body {
+            font-family: 'Vazirmatn', sans-serif;
+            margin: 0;
+            padding: 20px;
+            background-color: #8785a2;
+            background-image: url('data:image/svg+xml;utf8,<svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" opacity="0.2"><rect width="10" height="10" fill="#d3d3d3"/><rect x="10" y="10" width="10" height="10" fill="#d3d3d3"/></svg>');
+            direction: rtl;
+            color: #333;
+        }
+        .container {
+            max-width: 900px;
+            margin: 0 auto;
+            display: flex;
+            flex-direction: column;
+            gap: 10px;
+        }
+        .header {
+            background: #fff;
+            padding: 10px 20px;
+            border-radius: 8px;
+            box-shadow: 0 2px 5px rgba(0,0,0,0.1);
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+        .header h1 {
+            font-size: 20px;
+            text-shadow: 1px 1px 2px rgba(0,0,0,0.2);
+        }
+        .header select {
+            padding: 5px;
+            font-size: 14px;
+        }
+        .section {
+            background: #fff;
+            padding: 15px;
+            border-radius: 8px;
+            box-shadow: 0 2px 5px rgba(0,0,0,0.1);
+        }
+        h2 {
+            margin: 0 0 10px;
+            text-align: center;
+            color: #4a4a4a;
+            text-shadow: 1px 1px 2px rgba(0,0,0,0.2);
+            font-size: 16px;
+        }
+        label::after {
+            content: ':';
+        }
+        input, textarea {
+            width: 100%;
+            padding: 10px;
+            margin: 5px 0;
+            border: 1px solid #ddd;
+            border-radius: 4px;
+            font-family: 'Vazirmatn', sans-serif;
+        }
+        button {
+            padding: 8px 16px;
+            background-color: #003087;
+            color: white;
+            border: none;
+            border-radius: 4px;
+            cursor: pointer;
+            margin: 5px;
+            text-shadow: 1px 1px 2px #87ceeb;
+            font-weight: bold;
+            font-family: 'Vazirmatn', sans-serif;
+            box-shadow: 1px 1px 3px rgba(0,0,0,0.3);
+        }
+        button:hover {
+            background-color: #002357;
+        }
+        .button-group {
+            display: flex;
+            justify-content: center;
+            gap: 10px;
+        }
+        #guess-output {
+            padding: 10px;
+            background-color: #4a4a4a;
+            border-radius: 4px;
+            text-shadow: 1px 1px 2px rgba(0,0,0,0.2);
+            color: #ffd700;
+            min-height: 20px;
+        }
+        .modal {
+            display: none;
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            background: rgba(0,0,0,0.5);
+        }
+        .modal-content {
+            background: #fff;
+            margin: 10% auto;
+            padding: 15px;
+            width: 80%;
+            max-width: 600px;
+            max-height: 70vh;
+            overflow-y: auto;
+            border-radius: 8px;
+            position: relative;
+        }
+        .modal-content table {
+            width: 100%;
+            border-collapse: collapse;
+        }
+        .modal-content th, .modal-content td {
+            padding: 10px;
+            border-bottom: 1px solid #ddd;
+            text-align: right;
+        }
+        .modal-content input {
+            margin: 10px 0;
+        }
+        .close {
+            position: absolute;
+            top: 10px;
+            left: 10px;
+            cursor: pointer;
+        }
+        .execute-btn {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            flex-wrap: nowrap;
+        }
+        @media (min-width: 600px) {
+            .container {
+                flex-direction: row;
+                flex-wrap: wrap;
+            }
+            .section {
+                width: calc(33.33% - 10px);
+            }
+            .header {
+                width: 100%;
+            }
+        }
+        @media (max-width: 599px) {
+            .section, .header {
+                width: calc(100% - 20px);
+                margin: 0 10px;
+            }
+            .modal-content {
+                width: calc(100% - 20px);
+                margin: 10% 10px;
+            }
+            .execute-btn {
+                flex-direction: row;
+                align-items: center;
+            }
+            button {
+                width: auto;
+            }
+        }
+        [lang="en"] body, [lang="en"] .modal-content th, [lang="en"] .modal-content td {
+            direction: ltr;
+            text-align: left;
+        }
+    </style>
+</head>
+<body onload="document.getElementById('cmd-input').focus()">
+    <div class="container">
+        <div class="header">
+            <h1 data-fa="دستیار هوش مصنوعی" data-en="AI Assistant">دستیار هوش مصنوعی</h1>
+            <select id="language" onchange="changeLanguage()">
+                <option value="fa">فارسی</option>
+                <option value="en">English</option>
+            </select>
+        </div>
+        <div class="section">
+            <h2 data-fa="اجرای دستور" data-en="Execute Command">اجرای دستور</h2>
+            <div class="execute-btn">
+                <input type="text" id="cmd-input" onkeyup="guessCommand()" placeholder-fa="دستور را وارد کنید" placeholder-en="Enter command">
+                <button onclick="executeCommand()">
+                    <svg width="16" height="16" viewBox="0 0 24 24"><path d="M8 5v14l11-7z" fill="white"/></svg>
+                </button>
+            </div>
+        </div>
+        <div class="section">
+            <h2 data-fa="حدس دستور" data-en="Guess Command">حدس دستور</h2>
+            <div id="guess-output"></div>
+        </div>
+        <div class="section">
+            <h2 data-fa="معرفی دستورها" data-en="Define Commands">معرفی دستورها</h2>
+            <label data-fa="عنوان دستور" data-en="Command Title">عنوان دستور</label>
+            <input type="text" id="cmd-title" placeholder-fa="مثلاً: باز کردن گوگل" placeholder-en="e.g., Open Google">
+            <label data-fa="نشانی دستور" data-en="Command URL">نشانی دستور</label>
+            <input type="text" id="cmd-url" placeholder-fa="مثلاً: https://google.com" placeholder-en="e.g., https://google.com">
+            <div class="button-group">
+                <button onclick="addCommand()" data-fa="افزودن" data-en="Add">افزودن</button>
+                <button onclick="showCommands()" data-fa="نمایش دستورها" data-en="Show Commands">نمایش دستورها</button>
+            </div>
+        </div>
+    </div>
+
+    <div id="modal" class="modal" onclick="closeModal(event)">
+        <div class="modal-content">
+            <span class="close" onclick="closeModal(event)">
+                <svg width="20" height="20" viewBox="0 0 24 24"><path d="M6 18L18 6M6 6l12 12" stroke="#333" stroke-width="2"/></svg>
+            </span>
+            <h2 data-fa="فهرست دستورها" data-en="Command List">فهرست دستورها</h2>
+            <input type="text" id="search-cmd" onkeyup="filterCommands()" placeholder-fa="جستجوی عنوان دستور" placeholder-en="Search command title">
+            <table id="cmd-table">
+                <thead>
+                    <tr>
+                        <th data-fa="عنوان" data-en="Title">عنوان</th>
+                        <th data-fa="نشانی" data-en="URL">نشانی</th>
+                        <th data-fa="حذف" data-en="Delete">حذف</th>
+                    </tr>
+                </thead>
+                <tbody id="cmd-table-body"></tbody>
+            </table>
+        </div>
+    </div>
+
+    <script>
+        let commands = JSON.parse(localStorage.getItem('commands')) || [
+            { title: "باز کردن جستجوی گوگل", url: "https://google.com" },
+            { title: "ویکی‌پدیا", url: "https://wikipedia.org" },
+            { title: "نمایش تقویم", url: "https://calendar.google.com" }
+        ];
+
+        function addCommand() {
+            const title = document.getElementById('cmd-title').value.trim();
+            const url = document.getElementById('cmd-url').value.trim();
+            if (title && url) {
+                commands.push({ title, url });
+                localStorage.setItem('commands', JSON.stringify(commands));
+                document.getElementById('cmd-title').value = '';
+                document.getElementById('cmd-url').value = '';
+                alert(getText('added'));
+            } else {
+                alert(getText('emptyFields'));
+            }
+        }
+
+        function showCommands() {
+            const tbody = document.getElementById('cmd-table-body');
+            tbody.innerHTML = '';
+            commands.forEach((cmd, index) => {
+                const row = document.createElement('tr');
+                row.innerHTML = `
+                    <td>${cmd.title}</td>
+                    <td>${cmd.url}</td>
+                    <td>
+                        <svg width="20" height="20" viewBox="0 0 24 24" onclick="deleteCommand(${index})" style="cursor: pointer;">
+                            <path d="M6 19c0 1.1.9 2 2 2h8c1.1 0 2-.9 2-2V7H6v12zM19 4h-3.5l-1-1h-5l-1 1H5v2h14V4z" fill="#333"/>
+                        </svg>
+                    </td>
+                `;
+                tbody.appendChild(row);
+            });
+            document.getElementById('modal').style.display = 'block';
+            document.getElementById('search-cmd').value = '';
+            filterCommands();
+        }
+
+        function filterCommands() {
+            const search = document.getElementById('search-cmd').value.trim().toLowerCase();
+            const tbody = document.getElementById('cmd-table-body');
+            tbody.innerHTML = '';
+            commands.filter(cmd => cmd.title.toLowerCase().includes(search)).forEach((cmd, index) => {
+                const row = document.createElement('tr');
+                row.innerHTML = `
+                    <td>${cmd.title}</td>
+                    <td>${cmd.url}</td>
+                    <td>
+                        <svg width="20" height="20" viewBox="0 0 24 24" onclick="deleteCommand(${commands.indexOf(cmd)})" style="cursor: pointer;">
+                            <path d="M6 19c0 1.1.9 2 2 2h8c1.1 0 2-.9 2-2V7H6v12zM19 4h-3.5l-1-1h-5l-1 1H5v2h14V4z" fill="#333"/>
+                        </svg>
+                    </td>
+                `;
+                tbody.appendChild(row);
+            });
+        }
+
+        function deleteCommand(index) {
+            if (confirm(getText('confirmDelete'))) {
+                commands.splice(index, 1);
+                localStorage.setItem('commands', JSON.stringify(commands));
+                showCommands();
+            }
+        }
+
+        function closeModal(event) {
+            const modal = document.getElementById('modal');
+            const modalContent = document.querySelector('.modal-content');
+            // اگر کلیک روی خود مودال (خارج از محتوا) باشه یا روی ضربدر
+            if (event.target === modal || event.target.closest('.close')) {
+                modal.style.display = 'none';
+            }
+        }
+
+        function guessCommand() {
+            const input = document.getElementById('cmd-input').value.trim().toLowerCase();
+            const output = document.getElementById('guess-output');
+            if (!input) {
+                output.innerText = '';
+                return;
+            }
+            const scores = commands.map(cmd => {
+                const words = cmd.title.toLowerCase().split(' ');
+                const matches = words.filter(word => input.includes(word)).length;
+                return { cmd, score: matches / words.length };
+            });
+            const best = scores.sort((a, b) => b.score - a.score)[0];
+            output.innerText = best && best.score > 0 ? best.cmd.title : getText('noMatch');
+        }
+
+        function executeCommand() {
+            const input = document.getElementById('cmd-input').value.trim().toLowerCase();
+            const scores = commands.map(cmd => {
+                const words = cmd.title.toLowerCase().split(' ');
+                const matches = words.filter(word => input.includes(word)).length;
+                return { cmd, score: matches / words.length };
+            });
+            const best = scores.sort((a, b) => b.score - a.score)[0];
+            if (best && best.score > 0) {
+                window.open(best.cmd.url, '_blank', 'width=800,height=600,menubar=no,toolbar=no');
+            } else {
+                alert(getText('noMatch'));
+            }
+        }
+
+        function changeLanguage() {
+            const lang = document.getElementById('language').value;
+            document.documentElement.lang = lang;
+            document.body.style.direction = lang === 'fa' ? 'rtl' : 'ltr';
+            document.querySelectorAll('[data-fa][data-en]').forEach(el => {
+                el.innerText = el.getAttribute(`data-${lang}`);
+            });
+            document.querySelectorAll('[placeholder-fa][placeholder-en]').forEach(el => {
+                el.placeholder = el.getAttribute(`placeholder-${lang}`);
+            });
+        }
+
+        function getText(key) {
+            const texts = {
+                added: { fa: 'دستور اضافه شد!', en: 'Command added!' },
+                emptyFields: { fa: 'فیلدها نباید خالی باشن!', en: 'Fields cannot be empty!' },
+                confirmDelete: { fa: 'مطمئنی می‌خوای حذف کنی؟', en: 'Are you sure you want to delete?' },
+                noMatch: { fa: 'دستوری پیدا نشد!', en: 'No command found!' }
+            };
+            return texts[key][document.getElementById('language').value];
+        }
+
+        changeLanguage();
+    </script>
+</body>
+</html>
