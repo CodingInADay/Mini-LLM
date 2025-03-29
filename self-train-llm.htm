@@ -1,0 +1,228 @@
+<!DOCTYPE html>
+<html lang="fa">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Self-Train LLM</title>
+    <link href="https://cdn.jsdelivr.net/npm/vazirmatn@33.0.3/Vazirmatn-font-face.css" rel="stylesheet">
+    <style>
+        body {
+            font-family: 'Vazirmatn', sans-serif;
+            margin: 0;
+            padding: 20px;
+            background: #f5f6f5;
+        }
+        .container {
+            max-width: 900px;
+            margin: 0 auto;
+            padding: 0 15px;
+        }
+        .section {
+            background: white;
+            padding: 20px;
+            border-radius: 8px;
+            box-shadow: 0 4px 10px rgba(0,0,0,0.1);
+            margin-bottom: 20px;
+        }
+        h1, h2 {
+            margin: 0 0 15px;
+            color: #2c3e50;
+        }
+        select {
+            padding: 8px;
+            margin: 10px 0;
+            border: 1px solid #ddd;
+            border-radius: 4px;
+            width: 120px;
+        }
+        input[type="file"], input[type="text"] {
+            padding: 10px;
+            width: calc(100% - 22px);
+            margin: 10px 0;
+            border: 1px solid #ddd;
+            border-radius: 4px;
+            box-shadow: inset 0 1px 3px rgba(0,0,0,0.05);
+        }
+        button {
+            padding: 10px 20px;
+            background: #34495e;
+            color: white;
+            border: none;
+            border-radius: 4px;
+            cursor: pointer;
+            box-shadow: 0 2px 5px rgba(0,0,0,0.2);
+        }
+        button:hover { background: #2c3e50; }
+        .response {
+            margin-top: 10px;
+            padding: 10px;
+            background: #ecf0f1;
+            border-radius: 4px;
+            max-height: 150px;
+            overflow-y: auto;
+        }
+        .loader {
+            display: none;
+            margin: 10px 0;
+            text-align: center;
+            color: #34495e;
+        }
+        .loader svg { animation: spin 1s linear infinite; margin-right: 5px; }
+        @keyframes spin { 100% { transform: rotate(360deg); } }
+        @media (max-width: 600px) {
+            .section { padding: 15px; }
+            button, input { width: calc(100% - 22px); }
+            .container { padding: 0; }
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="section">
+            <h1 id="title">مدل زبانی خودیادگیرنده</h1>
+            <select id="langSelect" onchange="changeLanguage()">
+                <option value="fa" selected>فارسی</option>
+                <option value="en">English</option>
+            </select>
+            <input type="file" id="fileInput" accept=".txt,.html">
+            <button onclick="fetchContent()">دریافت اطلاعات</button>
+            <div class="loader" id="loader">
+                <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="#34495e" stroke-width="2">
+                    <path d="M21 12a9 9 0 1 1-6.22-8.66"/>
+                </svg>
+                <span id="loaderText">در حال پردازش...</span>
+            </div>
+            <div id="fetchResponse" class="response">نتیجه اینجا ظاهر می‌شود</div>
+        </div>
+        <div class="section">
+            <h2 id="chatTitle">
+                <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="#34495e" stroke-width="2" style="vertical-align: middle; margin-left: 5px;">
+                    <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4M7 10l5-5 5 5M12 5v14"/>
+                </svg>
+                گفتگو با مدل
+            </h2>
+            <input id="queryInput" type="text" placeholder="سوال خود را بپرسید">
+            <button onclick="getResponse()">بپرس</button>
+            <div id="response" class="response">پاسخ اینجا ظاهر می‌شود</div>
+        </div>
+    </div>
+
+    <script>
+        // تغییر زبان
+        function changeLanguage() {
+            const lang = document.getElementById('langSelect').value;
+            document.body.style.direction = lang === 'fa' ? 'rtl' : 'ltr';
+            document.getElementById('title').textContent = lang === 'fa' ? 'مدل زبانی خودیادگیرنده' : 'Self-Train LLM';
+            document.getElementById('chatTitle').innerHTML = `
+                <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="#34495e" stroke-width="2" style="vertical-align: middle; margin-${lang === 'fa' ? 'left' : 'right'}: 5px;">
+                    <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4M7 10l5-5 5 5M12 5v14"/>
+                </svg>
+                ${lang === 'fa' ? 'گفتگو با مدل' : 'Chat with Model'}
+            `;
+            document.getElementById('fileInput').nextElementSibling.textContent = lang === 'fa' ? 'دریافت اطلاعات' : 'Fetch Data';
+            document.getElementById('loaderText').textContent = lang === 'fa' ? 'در حال پردازش...' : 'Processing...';
+            document.getElementById('fetchResponse').textContent = lang === 'fa' ? 'نتیجه اینجا ظاهر می‌شود' : 'Result will appear here';
+            document.getElementById('queryInput').placeholder = lang === 'fa' ? 'سوال خود را بپرسید' : 'Ask your question';
+            document.getElementById('queryInput').nextElementSibling.textContent = lang === 'fa' ? 'بپرس' : 'Ask';
+            document.getElementById('response').textContent = lang === 'fa' ? 'پاسخ اینجا ظاهر می‌شود' : 'Response will appear here';
+        }
+
+        // پردازش فایل آپلود شده
+        function fetchContent() {
+            const fileInput = document.getElementById('fileInput');
+            const responseDiv = document.getElementById('fetchResponse');
+            const loader = document.getElementById('loader');
+            const lang = document.getElementById('langSelect').value;
+
+            if (!fileInput.files.length) {
+                responseDiv.textContent = lang === 'fa' ? 'فایلی انتخاب نشده!' : 'No file selected!';
+                return;
+            }
+
+            loader.style.display = 'block';
+            responseDiv.textContent = '';
+
+            const file = fileInput.files[0];
+            const reader = new FileReader();
+            reader.onload = function(event) {
+                const content = event.target.result;
+                const text = content.replace(/<[^>]+>/g, ''); // حذف تگ‌های HTML
+                const cleanText = text.replace(/[\n\r\t]+/g, ' ').replace(/\s+/g, ' ').trim();
+                
+                // ذخیره در Local Storage
+                const sentences = cleanText.split(/[.!?]+/).map(s => s.trim()).filter(s => s.length > 10);
+                const wordIndex = {};
+                sentences.forEach((sentence, index) => {
+                    const words = sentence.toLowerCase().split(/\s+/);
+                    words.forEach(word => {
+                        if (word.length > 2 && !['است', 'این', 'که', 'در', 'و', 'از'].includes(word)) {
+                            if (!wordIndex[word]) wordIndex[word] = [];
+                            if (!wordIndex[word].includes(index)) wordIndex[word].push(index);
+                        }
+                    });
+                });
+
+                localStorage.setItem('sentences', JSON.stringify(sentences));
+                localStorage.setItem('wordIndex', JSON.stringify(wordIndex));
+
+                loader.style.display = 'none';
+                responseDiv.textContent = lang === 'fa' ? 'با موفقیت خوانده شد!' : 'Successfully fetched!';
+            };
+            reader.readAsText(file);
+        }
+
+        // جستجوی پاسخ
+        function getResponse() {
+            const query = document.getElementById('queryInput').value.trim();
+            const responseDiv = document.getElementById('response');
+            const lang = document.getElementById('langSelect').value;
+
+            if (!query) {
+                responseDiv.textContent = lang === 'fa' ? 'سوال خالی است!' : 'Query is empty!';
+                return;
+            }
+
+            const stopWords = lang === 'fa' 
+                ? ['کجاست', 'چیست', 'چه', 'کیست', 'است', 'در', 'با', 'به'] 
+                : ['where', 'is', 'what', 'who', 'a', 'an', 'the', 'in', 'on', 'at', 'how', 'many'];
+            const keywords = query.split(/\s+/).filter(word => !stopWords.includes(word.toLowerCase()));
+
+            if (!keywords.length) {
+                responseDiv.textContent = lang === 'fa' ? 'سوال نامشخصه!' : 'Unclear question!';
+                return;
+            }
+
+            const sentences = JSON.parse(localStorage.getItem('sentences') || '[]');
+            const wordIndex = JSON.parse(localStorage.getItem('wordIndex') || '{}');
+
+            if (!sentences.length) {
+                responseDiv.textContent = lang === 'fa' ? 'چیزی پیدا نکردم! ابتدا فایلی آپلود کنید.' : 'Nothing found! Upload a file first.';
+                return;
+            }
+
+            let knowledgeIds = new Set();
+            keywords.forEach(keyword => {
+                const matches = wordIndex[keyword.toLowerCase()] || [];
+                matches.forEach(id => knowledgeIds.add(id));
+            });
+
+            const scoredSentences = [];
+            knowledgeIds.forEach(id => {
+                const sentence = sentences[id];
+                let score = 0;
+                keywords.forEach(keyword => {
+                    if (sentence.toLowerCase().includes(keyword.toLowerCase())) score++;
+                });
+                scoredSentences.push({ sentence, score });
+            });
+
+            if (scoredSentences.length) {
+                scoredSentences.sort((a, b) => b.score - a.score);
+                responseDiv.textContent = scoredSentences[0].sentence + '.';
+            } else {
+                responseDiv.textContent = lang === 'fa' ? 'چیزی پیدا نکردم!' : 'Nothing found!';
+            }
+        }
+    </script>
+</body>
+</html>
