@@ -15,7 +15,7 @@ $db->exec("CREATE TABLE IF NOT EXISTS knowledge (id INTEGER PRIMARY KEY AUTOINCR
 $db->exec("CREATE TABLE IF NOT EXISTS word_index (id INTEGER PRIMARY KEY AUTOINCREMENT, word TEXT NOT NULL, knowledge_id INTEGER, frequency INTEGER DEFAULT 1, FOREIGN KEY(knowledge_id) REFERENCES knowledge(id))");
 $db->exec("CREATE TABLE IF NOT EXISTS feedback (id INTEGER PRIMARY KEY AUTOINCREMENT, knowledge_id INTEGER, rating INTEGER, FOREIGN KEY(knowledge_id) REFERENCES knowledge(id))");
 $db->exec("CREATE TABLE IF NOT EXISTS corrections (id INTEGER PRIMARY KEY AUTOINCREMENT, query TEXT NOT NULL UNIQUE, answer TEXT NOT NULL)");
-$db->exec("CREATE TABLE IF NOT EXISTS ngrams (word1 TEXT, word2 TEXT, count INTEGER DEFAULT 1)");
+$db->exec("CREATE TABLE IF NOT EXISTS ngrams (word1 TEXT, word2 TEXT, word3 TEXT, count INTEGER DEFAULT 1)");
 $db->exec("CREATE INDEX IF NOT EXISTS idx_word ON word_index(word)");
 
 // کاربر اولیه
@@ -75,16 +75,19 @@ function fetchWebContent($fileContent, $url, $db) {
                     $stmt->bindValue(':word', $word, SQLITE3_TEXT);
                     $stmt->bindValue(':knowledge_id', $knowledgeId, SQLITE3_INTEGER);
                     $stmt->execute();
-                    if (isset($words[$i + 1])) {
+                    if (isset($words[$i + 1]) && isset($words[$i + 2])) {
                         $word2 = trim($words[$i + 1], ".,!?");
-                        if (strlen($word2) > 2) {
-                            $stmt = $db->prepare("INSERT OR IGNORE INTO ngrams (word1, word2) VALUES (:word1, :word2)");
+                        $word3 = trim($words[$i + 2], ".,!?");
+                        if (strlen($word2) > 2 && strlen($word3) > 2) {
+                            $stmt = $db->prepare("INSERT OR IGNORE INTO ngrams (word1, word2, word3) VALUES (:word1, :word2, :word3)");
                             $stmt->bindValue(':word1', $word, SQLITE3_TEXT);
                             $stmt->bindValue(':word2', $word2, SQLITE3_TEXT);
+                            $stmt->bindValue(':word3', $word3, SQLITE3_TEXT);
                             $stmt->execute();
-                            $stmt = $db->prepare("UPDATE ngrams SET count = count + 1 WHERE word1 = :word1 AND word2 = :word2");
+                            $stmt = $db->prepare("UPDATE ngrams SET count = count + 1 WHERE word1 = :word1 AND word2 = :word2 AND word3 = :word3");
                             $stmt->bindValue(':word1', $word, SQLITE3_TEXT);
                             $stmt->bindValue(':word2', $word2, SQLITE3_TEXT);
+                            $stmt->bindValue(':word3', $word3, SQLITE3_TEXT);
                             $stmt->execute();
                         }
                     }
@@ -104,7 +107,7 @@ function getWikipediaData($query, $lang) {
         $pages = $data['query']['pages'] ?? [];
         foreach ($pages as $page) {
             if (isset($page['extract'])) {
-                return substr($page['extract'], 0, 300);
+                return substr($page['extract'], 0, );
             }
         }
     }
@@ -112,25 +115,68 @@ function getWikipediaData($query, $lang) {
 }
 
 // تابع تولید متن
-function generateText($query, $db) {
+function generateText($query, $db, $lang) {
     $tokenCount = $db->querySingle("SELECT COUNT(DISTINCT word) FROM word_index");
     if ($tokenCount < 10) return null;
 
     $words = preg_split('/\s+/', $query);
-    $startWord = $words[0] ?? '';
-    $sentence = [$startWord];
-    for ($i = 1; $i < 5; $i++) {
-        $lastWord = $sentence[$i - 1];
-        $stmt = $db->prepare("SELECT word2 FROM ngrams WHERE word1 = :word ORDER BY count DESC, RANDOM() LIMIT 1");
-        $stmt->bindValue(':word', $lastWord, SQLITE3_TEXT);
-        $result = $stmt->execute()->fetchArray(SQLITE3_ASSOC);
-        if ($result) {
-            $sentence[] = $result['word2'];
-        } else {
-            break;
+    $startWord = null;
+    $maxFreq = 0;
+    foreach ($words as $word) {
+        $word = trim($word, ".,!?");
+        if (strlen($word) > 2) {
+            $stmt = $db->prepare("SELECT SUM(frequency) as freq FROM word_index WHERE word = :word");
+            $stmt->bindValue(':word', $word, SQLITE3_TEXT);
+            $freq = $stmt->execute()->fetchArray(SQLITE3_ASSOC)['freq'] ?? 0;
+            if ($freq > $maxFreq) {
+                $maxFreq = $freq;
+                $startWord = $word;
+            }
         }
     }
-    return implode(' ', $sentence);
+    if (!$startWord) $startWord = $words[0] ?? '';
+
+    $sentence = [$startWord];
+    $currentWord1 = $startWord;
+    $currentWord2 = null;
+
+    for ($i = 0; $i < 9; $i++) {
+        if (!$currentWord2) {
+            $stmt = $db->prepare("SELECT word2 FROM ngrams WHERE word1 = :word1 ORDER BY count DESC, RANDOM() LIMIT 1");
+            $stmt->bindValue(':word1', $currentWord1, SQLITE3_TEXT);
+            $result = $stmt->execute()->fetchArray(SQLITE3_ASSOC);
+            if ($result) {
+                $currentWord2 = $result['word2'];
+                $sentence[] = $currentWord2;
+            } else {
+                break;
+            }
+        } else {
+            $stmt = $db->prepare("SELECT word3 FROM ngrams WHERE word1 = :word1 AND word2 = :word2 ORDER BY count DESC, RANDOM() LIMIT 1");
+            $stmt->bindValue(':word1', $currentWord1, SQLITE3_TEXT);
+            $stmt->bindValue(':word2', $currentWord2, SQLITE3_TEXT);
+            $result = $stmt->execute()->fetchArray(SQLITE3_ASSOC);
+            if ($result) {
+                $nextWord = $result['word3'];
+                $sentence[] = $nextWord;
+                $currentWord1 = $currentWord2;
+                $currentWord2 = $nextWord;
+            } else {
+                break;
+            }
+        }
+    }
+
+    $isFarsiQuery = preg_match('/[\x{0600}-\x{06FF}]/u', $query);
+    $finalSentence = [];
+    foreach ($sentence as $word) {
+        $isFarsiWord = preg_match('/[\x{0600}-\x{06FF}]/u', $word);
+        if (($isFarsiQuery && $isFarsiWord) || (!$isFarsiQuery && !$isFarsiWord)) {
+            $finalSentence[] = $word;
+        }
+    }
+
+    return count($finalSentence) > 1 ? implode(' ', $finalSentence) : null;
 }
 
 // تابع جستجوی پاسخ
@@ -174,9 +220,33 @@ function getAnswer($query, $db, $lang, $useWikipedia, $isLoggedIn, &$moreAvailab
                 return $wikiAnswer . ($moreAvailable ? ' <a href="#" onclick="getMore(event)">[...]</a>' : '');
             }
         }
-        $generated = generateText($query, $db);
+        $generated = generateText($query, $db, $lang);
         $moreAvailable = $useWikipedia || $generated;
-        return $generated ?? ($lang === 'fa' ? 'دانشم کافی نیست!' : 'My knowledge is not enough!') . ($moreAvailable ? ' <a href="#" onclick="getMore(event)">[...]</a>' : '');
+        if ($generated) {
+            $stmt = $db->prepare("INSERT INTO knowledge (page_id, sentence) VALUES (0, :sentence)");
+            $stmt->bindValue(':sentence', $generated, SQLITE3_TEXT);
+            $stmt->execute();
+            $knowledgeId = $db->lastInsertRowID();
+
+            $words = preg_split('/\s+/', $generated);
+            foreach ($words as $word) {
+                $word = trim($word, ".,!?");
+                if (strlen($word) > 2) {
+                    $stmt = $db->prepare("INSERT OR IGNORE INTO word_index (word, knowledge_id) VALUES (:word, :knowledge_id)");
+                    $stmt->bindValue(':word', $word, SQLITE3_TEXT);
+                    $stmt->bindValue(':knowledge_id', $knowledgeId, SQLITE3_INTEGER);
+                    $stmt->execute();
+                    $stmt = $db->prepare("UPDATE word_index SET frequency = frequency + 1 WHERE word = :word AND knowledge_id = :knowledge_id");
+                    $stmt->bindValue(':word', $word, SQLITE3_TEXT);
+                    $stmt->bindValue(':knowledge_id', $knowledgeId, SQLITE3_INTEGER);
+                    $stmt->execute();
+                }
+            }
+
+            $label = ($lang === 'fa' ? ' [جدید]' : ' [New]');
+            return $generated . $label . ($moreAvailable ? ' <a href="#" onclick="getMore(event)">[...]</a>' : '');
+        }
+        return ($lang === 'fa' ? 'دانشم کافی نیست!' : 'My knowledge is not enough!') . ($moreAvailable ? ' <a href="#" onclick="getMore(event)">[...]</a>' : '');
     }
 
     $idList = implode(',', $knowledgeIds);
@@ -218,9 +288,33 @@ function getAnswer($query, $db, $lang, $useWikipedia, $isLoggedIn, &$moreAvailab
         return $sentence . ($moreAvailable ? ' <a href="#" onclick="getMore(event)">[...]</a>' : '');
     }
 
-    $generated = generateText($query, $db);
+    $generated = generateText($query, $db, $lang);
     $moreAvailable = $useWikipedia || $generated;
-    return $generated ?? ($lang === 'fa' ? 'دانشم کافی نیست!' : 'My knowledge is not enough!') . ($moreAvailable ? ' <a href="#" onclick="getMore(event)">[...]</a>' : '');
+    if ($generated) {
+        $stmt = $db->prepare("INSERT INTO knowledge (page_id, sentence) VALUES (0, :sentence)");
+        $stmt->bindValue(':sentence', $generated, SQLITE3_TEXT);
+        $stmt->execute();
+        $knowledgeId = $db->lastInsertRowID();
+
+        $words = preg_split('/\s+/', $generated);
+        foreach ($words as $word) {
+            $word = trim($word, ".,!?");
+            if (strlen($word) > 2) {
+                $stmt = $db->prepare("INSERT OR IGNORE INTO word_index (word, knowledge_id) VALUES (:word, :knowledge_id)");
+                $stmt->bindValue(':word', $word, SQLITE3_TEXT);
+                $stmt->bindValue(':knowledge_id', $knowledgeId, SQLITE3_INTEGER);
+                $stmt->execute();
+                $stmt = $db->prepare("UPDATE word_index SET frequency = frequency + 1 WHERE word = :word AND knowledge_id = :knowledge_id");
+                $stmt->bindValue(':word', $word, SQLITE3_TEXT);
+                $stmt->bindValue(':knowledge_id', $knowledgeId, SQLITE3_INTEGER);
+                $stmt->execute();
+            }
+        }
+
+        $label = ($lang === 'fa' ? ' [جدید]' : ' [New]');
+        return $generated . $label . ($moreAvailable ? ' <a href="#" onclick="getMore(event)">[...]</a>' : '');
+    }
+    return ($lang === 'fa' ? 'دانشم کافی نیست!' : 'My knowledge is not enough!') . ($moreAvailable ? ' <a href="#" onclick="getMore(event)">[...]</a>' : '');
 }
 
 // تعداد توکن‌ها
@@ -287,8 +381,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                              '<div id="correctionBox" style="display:none; margin-top: 5px;">' .
                              ($lang === 'fa' ? 'جواب درست: ' : 'Correct answer: ') .
                              '<input type="text" id="correctAnswer">' .
-                              '<button onclick="submitCorrection()" style="width:50px;">ثبت</button></div>';
-           }
+                             '<button onclick="submitCorrection()" style="width: 60px;">' . ($lang === 'fa' ? 'ثبت' : 'Save') . '</button></div>';
+            }
             $response .= '</div>';
         }
         $response .= '<input type="hidden" id="usedIds" value=\'' . json_encode($usedIds) . '\'>';
@@ -310,7 +404,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                              '<div id="correctionBox" style="display:none; margin-top: 5px;">' .
                              ($lang === 'fa' ? 'جواب درست: ' : 'Correct answer: ') .
                              '<input type="text" id="correctAnswer">' .
-                             '<button style="width:50px;" onclick="submitCorrection()">ثبت</button></div>';
+                             '<button onclick="submitCorrection()" style="width: 60px;">' . ($lang === 'fa' ? 'ثبت' : 'Save') . '</button></div>';
             }
             $response .= '</div>';
         }
@@ -356,24 +450,23 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     <style>
         /* متغیرهای اصلی برای تم‌ها */
         :root {
-            --dark-bg: #1e2a44;           /* پس‌زمینه تیره */
-            --dark-frame: #2c3e50;        /* فریم تیره */
-            --dark-accent: #8e44ad;       /* رنگ برجسته تیره */
-            --dark-text: #e0e0e0;         /* متن تیره */
-            --button: #4d0099;            /* دکمه تیره */
-            --button-hover: #4d0099;      /* هاور دکمه تیره */
-            --light-bg: #ecf0f1;          /* پس‌زمینه روشن */
-            --light-frame: #ffffff;       /* فریم روشن */
-            --light-accent: #9b59b6;      /* رنگ برجسته روشن */
-            --light-text: #2c3e50;        /* متن روشن */
-            --light-button: #8e44ad;      /* دکمه روشن */
-            --light-button-hover: #4d0099;/* هاور دکمه روشن */
-            --shadow: 0 4px 10px rgba(0, 0, 0, 0.2); /* سایه */
-            --radius: 8px;                /* شعاع گوشه‌ها */
-            --transition: all 0.3s ease;  /* انیمیشن */
+            --dark-bg: #1e2a44;
+            --dark-frame: #2c3e50;
+            --dark-accent: #8e44ad;
+            --dark-text: #e0e0e0;
+            --button: #4d0099;
+            --button-hover: #4d0099;
+            --light-bg: #ecf0f1;
+            --light-frame: #ffffff;
+            --light-accent: #9b59b6;
+            --light-text: #2c3e50;
+            --light-button: #8e44ad;
+            --light-button-hover: #4d0099;
+            --shadow: 0 4px 10px rgba(0, 0, 0, 0.2);
+            --radius: 8px;
+            --transition: all 0.3s ease;
         }
 
-        /* استایل‌های پایه */
         * {
             margin: 0;
             padding: 0;
@@ -396,7 +489,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             color: var(--light-text);
         }
 
-        /* کانتینر اصلی */
         .container {
             max-width: 1200px;
             margin: 0 auto;
@@ -410,7 +502,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             .container { max-width: 60%; }
         }
 
-        /* هدر */
         .header-section {
             background: var(--dark-frame);
             padding: 8px;
@@ -457,7 +548,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             color: var(--light-text);
         }
 
-        /* بخش‌ها */
         .section {
             background: var(--dark-frame);
             padding: 15px;
@@ -471,7 +561,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             background: var(--light-frame);
         }
 
-        /* المان‌های ورودی */
         select, input, textarea, button {
             padding: 5px;
             border-radius: var(--radius);
@@ -534,7 +623,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             height: 150px;
         }
 
-        /* پاسخ‌ها */
         .response {
             padding: 15px;
             background: rgba(255, 255, 255, 0.1);
@@ -550,7 +638,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             background: rgba(0, 0, 0, 0.05);
         }
 
-        /* بخش چت */
         .chat-section {
             padding: 15px;
             margin-top: -5px;
@@ -621,7 +708,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             background: var(--button);
         }
 
-        /* مودال */
         .modal {
             display: none;
             position: fixed;
@@ -657,7 +743,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             margin: 10px 0;
         }
 
-        /* انیمیشن پردازش */
         .processing {
             animation: blink 1s infinite;
         }
@@ -666,7 +751,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             50% { opacity: 0.5; }
         }
 
-        /* تنظیمات برای موبایل */
         @media (max-width: 600px) {
             .container {
                 padding: 10px;
@@ -702,7 +786,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             }
         }
 
-        /* لینک‌ها */
         a {
             text-decoration: none;
             color: #87ceeb;
@@ -764,7 +847,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         <div class="chat-section">
             <div class="container1">
                 <div class="chat-box">
-                    <input value="&nbsp;" id="queryInput" type="text" placeholder="<?= $lang === 'fa' ? 'سوال خود را بپرسید' : 'Ask your question' ?>" autocomplete="off">
+                    <input value=" " id="queryInput" type="text" placeholder="<?= $lang === 'fa' ? 'سوال خود را بپرسید' : 'Ask your question' ?>" autocomplete="off">
                     <button class="send-btn" onclick="getResponse()" style="width:40px;">
                         <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="var(--dark-text)"><path d="M22 2L11 13M22 2l-7 20-4-9-9-4 20-7z"/></svg>
                     </button>
