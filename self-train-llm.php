@@ -3,7 +3,7 @@ header('Content-Type: text/html; charset=UTF-8');
 
 // ثابت‌ها
 define('DEFAULT_USER', 'admin');
-define('DEFAULT_PASS', 'password');
+define('DEFAULT_PASS', 'admin');
 
 // اتصال به دیتابیس
 $db = new SQLite3('faradan.sqlite');
@@ -63,9 +63,10 @@ function fetchWebContent($fileContent, $url, $db) {
             $stmt->execute();
 
             $knowledgeId = $db->lastInsertRowID();
-            $words = preg_split('/\s+/', mb_strtolower($sentence));
+            $words = preg_split('/\s+/', $sentence);
             foreach ($words as $i => $word) {
-                if (strlen($word) > 2 && !in_array($word, ['است', 'این', 'که', 'در', 'و', 'از'])) {
+                $word = trim($word, ".,!?");
+                if (strlen($word) > 2) {
                     $stmt = $db->prepare("INSERT OR IGNORE INTO word_index (word, knowledge_id) VALUES (:word, :knowledge_id)");
                     $stmt->bindValue(':word', $word, SQLITE3_TEXT);
                     $stmt->bindValue(':knowledge_id', $knowledgeId, SQLITE3_INTEGER);
@@ -75,14 +76,17 @@ function fetchWebContent($fileContent, $url, $db) {
                     $stmt->bindValue(':knowledge_id', $knowledgeId, SQLITE3_INTEGER);
                     $stmt->execute();
                     if (isset($words[$i + 1])) {
-                        $stmt = $db->prepare("INSERT OR IGNORE INTO ngrams (word1, word2) VALUES (:word1, :word2)");
-                        $stmt->bindValue(':word1', $word, SQLITE3_TEXT);
-                        $stmt->bindValue(':word2', $words[$i + 1], SQLITE3_TEXT);
-                        $stmt->execute();
-                        $stmt = $db->prepare("UPDATE ngrams SET count = count + 1 WHERE word1 = :word1 AND word2 = :word2");
-                        $stmt->bindValue(':word1', $word, SQLITE3_TEXT);
-                        $stmt->bindValue(':word2', $words[$i + 1], SQLITE3_TEXT);
-                        $stmt->execute();
+                        $word2 = trim($words[$i + 1], ".,!?");
+                        if (strlen($word2) > 2) {
+                            $stmt = $db->prepare("INSERT OR IGNORE INTO ngrams (word1, word2) VALUES (:word1, :word2)");
+                            $stmt->bindValue(':word1', $word, SQLITE3_TEXT);
+                            $stmt->bindValue(':word2', $word2, SQLITE3_TEXT);
+                            $stmt->execute();
+                            $stmt = $db->prepare("UPDATE ngrams SET count = count + 1 WHERE word1 = :word1 AND word2 = :word2");
+                            $stmt->bindValue(':word1', $word, SQLITE3_TEXT);
+                            $stmt->bindValue(':word2', $word2, SQLITE3_TEXT);
+                            $stmt->execute();
+                        }
                     }
                 }
             }
@@ -100,7 +104,7 @@ function getWikipediaData($query, $lang) {
         $pages = $data['query']['pages'] ?? [];
         foreach ($pages as $page) {
             if (isset($page['extract'])) {
-                return substr($page['extract'], 0, );
+                return substr($page['extract'], 0, 300);
             }
         }
     }
@@ -112,7 +116,7 @@ function generateText($query, $db) {
     $tokenCount = $db->querySingle("SELECT COUNT(DISTINCT word) FROM word_index");
     if ($tokenCount < 10) return null;
 
-    $words = preg_split('/\s+/', mb_strtolower($query));
+    $words = preg_split('/\s+/', $query);
     $startWord = $words[0] ?? '';
     $sentence = [$startWord];
     for ($i = 1; $i < 5; $i++) {
@@ -131,7 +135,7 @@ function generateText($query, $db) {
 
 // تابع جستجوی پاسخ
 function getAnswer($query, $db, $lang, $useWikipedia, $isLoggedIn, &$moreAvailable = false, &$knowledgeId = null, $usedIds = []) {
-    $query = trim(mb_strtolower($query));
+    $query = trim($query);
     $stmt = $db->prepare("SELECT answer FROM corrections WHERE query = :query");
     $stmt->bindValue(':query', $query, SQLITE3_TEXT);
     $result = $stmt->execute()->fetchArray(SQLITE3_ASSOC);
@@ -142,11 +146,11 @@ function getAnswer($query, $db, $lang, $useWikipedia, $isLoggedIn, &$moreAvailab
 
     $words = preg_split('/\s+/', $query);
     $stopWords = $lang === 'fa' ? ['کجاست', 'چیست', 'چه', 'کیست', 'است', 'در', 'با', 'به'] : ['where', 'is', 'what', 'who', 'a', 'an', 'the', 'in', 'on', 'at'];
-    $keywords = array_filter($words, fn($word) => !in_array(mb_strtolower($word), $stopWords));
+    $keywords = array_filter($words, fn($word) => !in_array($word, $stopWords));
 
     if (empty($keywords)) return $lang === 'fa' ? 'دانشم کافی نیست!' : 'My knowledge is not enough!';
 
-    $conditions = array_map(fn($keyword) => "word LIKE '%" . $db->escapeString(mb_strtolower($keyword)) . "%'", $keywords);
+    $conditions = array_map(fn($keyword) => "word LIKE '%" . $db->escapeString($keyword) . "%'", $keywords);
     $whereClause = implode(' OR ', $conditions);
 
     $sql = "SELECT DISTINCT knowledge_id FROM word_index WHERE " . $whereClause;
@@ -283,8 +287,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                              '<div id="correctionBox" style="display:none; margin-top: 5px;">' .
                              ($lang === 'fa' ? 'جواب درست: ' : 'Correct answer: ') .
                              '<input type="text" id="correctAnswer">' .
-                             '<button onclick="submitCorrection()">ثبت</button></div>';
-            }
+                              '<button onclick="submitCorrection()" style="width:50px;">ثبت</button></div>';
+           }
             $response .= '</div>';
         }
         $response .= '<input type="hidden" id="usedIds" value=\'' . json_encode($usedIds) . '\'>';
@@ -306,7 +310,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                              '<div id="correctionBox" style="display:none; margin-top: 5px;">' .
                              ($lang === 'fa' ? 'جواب درست: ' : 'Correct answer: ') .
                              '<input type="text" id="correctAnswer">' .
-                             '<button onclick="submitCorrection()">ثبت</button></div>';
+                             '<button style="width:50px;" onclick="submitCorrection()">ثبت</button></div>';
             }
             $response .= '</div>';
         }
@@ -347,26 +351,35 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>فرادان | Faradan</title>
+    <link rel="shortcut icon" href="https://cdn.sstatic.net/Sites/stackoverflow/Img/favicon.ico">
     <link href="https://fonts.googleapis.com/css2?family=Vazirmatn:wght@300;400;700&display=swap" rel="stylesheet">
     <style>
+        /* متغیرهای اصلی برای تم‌ها */
         :root {
-            --dark-bg: #1e2a44;
-            --dark-frame: #2c3e50;
-            --dark-accent: #8e44ad;
-            --dark-text: #e0e0e0;
-            --button: #3498db;
-            --button-hover: #2980b9;
-            --light-bg: #ecf0f1;
-            --light-frame: #ffffff;
-            --light-accent: #9b59b6;
-            --light-text: #2c3e50;
-            --light-button: #8e44ad;
-            --light-button-hover: #7d3c98;
-            --shadow: 0 4px 10px rgba(0, 0, 0, 0.2);
-            --radius: 6px;
-            --transition: all 0.3s ease;
+            --dark-bg: #1e2a44;           /* پس‌زمینه تیره */
+            --dark-frame: #2c3e50;        /* فریم تیره */
+            --dark-accent: #8e44ad;       /* رنگ برجسته تیره */
+            --dark-text: #e0e0e0;         /* متن تیره */
+            --button: #4d0099;            /* دکمه تیره */
+            --button-hover: #4d0099;      /* هاور دکمه تیره */
+            --light-bg: #ecf0f1;          /* پس‌زمینه روشن */
+            --light-frame: #ffffff;       /* فریم روشن */
+            --light-accent: #9b59b6;      /* رنگ برجسته روشن */
+            --light-text: #2c3e50;        /* متن روشن */
+            --light-button: #8e44ad;      /* دکمه روشن */
+            --light-button-hover: #4d0099;/* هاور دکمه روشن */
+            --shadow: 0 4px 10px rgba(0, 0, 0, 0.2); /* سایه */
+            --radius: 8px;                /* شعاع گوشه‌ها */
+            --transition: all 0.3s ease;  /* انیمیشن */
         }
-        * { margin: 0; padding: 0; box-sizing: border-box; }
+
+        /* استایل‌های پایه */
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
         body {
             font-family: 'Vazirmatn', sans-serif;
             background: var(--dark-bg);
@@ -375,112 +388,240 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             display: flex;
             flex-direction: column;
             transition: var(--transition);
-            font-size: 14px;
+            font-size: 16px;
         }
+
         body.light {
             background: var(--light-bg);
             color: var(--light-text);
         }
-        .container { max-width: 1200px; margin: 0 auto; padding: 15px; flex-grow: 1; text-align: center; width: 100%; }
-        @media (min-width: 601px) { .container { max-width: 60%; } }
+
+        /* کانتینر اصلی */
+        .container {
+            max-width: 1200px;
+            margin: 0 auto;
+            padding: 20px;
+            flex-grow: 1;
+            text-align: center;
+            width: 100%;
+        }
+
+        @media (min-width: 601px) {
+            .container { max-width: 60%; }
+        }
+
+        /* هدر */
         .header-section {
             background: var(--dark-frame);
-            padding: 10px;
+            padding: 8px;
             border-radius: var(--radius);
             box-shadow: var(--shadow);
-            margin-bottom: 15px;
+            margin-bottom: 20px;
             width: 100%;
+            box-sizing: border-box;
         }
-        body.light .header-section { background: var(--light-frame); }
-        .header { display: flex; justify-content: space-between; align-items: center; }
-        h1 { font-size: 20px; font-weight: bold; text-shadow: 1px 1px 2px rgba(0, 0, 0, 0.3); display: flex; align-items: center; }
-        h1 svg { margin-<?= $lang === 'fa' ? 'left' : 'right' ?>: 6px; }
+
+        body.light .header-section {
+            background: var(--light-frame);
+        }
+
+        .header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            gap: 10px;
+        }
+
+        h1 {
+            font-size: 24px;
+            font-weight: bold;
+            text-shadow: 1px 1px 2px rgba(0, 0, 0, 0.3);
+            display: flex;
+            align-items: center;
+        }
+
+        h1 svg {
+            margin-<?= $lang === 'fa' ? 'left' : 'right' ?>: 8px;
+        }
+
         .token-box {
-            font-size: 10px;
+            font-size: 14px;
             background: rgba(255, 255, 255, 0.1);
-            padding: 4px 8px;
-            border-radius: 4px;
-            margin-top: 5px;
+            padding: 6px 12px;
+            border-radius: 6px;
+            margin-top: 8px;
         }
-        body.light .token-box { background: rgba(0, 0, 0, 0.05); color: var(--light-text); }
+
+        body.light .token-box {
+            background: rgba(0, 0, 0, 0.05);
+            color: var(--light-text);
+        }
+
+        /* بخش‌ها */
         .section {
             background: var(--dark-frame);
-            padding: 10px;
+            padding: 15px;
             border-radius: var(--radius);
             box-shadow: var(--shadow);
-            margin-bottom: 15px;
+            margin-bottom: 20px;
             width: 100%;
         }
-        body.light .section { background: var(--light-frame); }
+
+        body.light .section {
+            background: var(--light-frame);
+        }
+
+        /* المان‌های ورودی */
         select, input, textarea, button {
-            padding: 8px;
+            padding: 5px;
             border-radius: var(--radius);
             font-family: 'Vazirmatn', sans-serif;
             transition: var(--transition);
-            font-size: 10px;
+            font-size: 12px;
+            vertical-align: middle;
         }
+
         select {
             background: var(--button);
             color: white;
-            border: none;
-            height: 30px;
-            margin-<?= $lang === 'fa' ? 'left' : 'right' ?>: 5px;
+            margin-<?= $lang === 'fa' ? 'left' : 'right' ?>: 15px;
         }
-        body.light select { background: var(--light-button); }
+
+        body.light select {
+            background: var(--light-button);
+        }
+
         input, textarea {
             width: 100%;
             border: 1px solid var(--dark-accent);
             background: var(--dark-bg);
             color: var(--dark-text);
         }
+
         body.light input, body.light textarea {
             border: 1px solid var(--light-accent);
             background: var(--light-bg);
             color: var(--light-text);
         }
+
         button {
             background: var(--button);
             color: white;
-            border: none;
             cursor: pointer;
-            height: 30px;
+            height: 40px;
         }
-        button:hover { background: var(--button-hover); }
-        body.light button { background: var(--light-button); }
-        body.light button:hover { background: var(--light-button-hover); }
-        .fetch-button { width: 40%; margin: 8px auto; display: block; }
-        textarea { resize: vertical; }
+
+        button:hover {
+            background: var(--button-hover);
+        }
+
+        body.light button {
+            background: var(--light-button);
+        }
+
+        body.light button:hover {
+            background: var(--light-button-hover);
+        }
+
+        .fetch-button {
+            width: 50%;
+            margin: 10px auto;
+            display: block;
+        }
+
+        textarea {
+            resize: vertical;
+            height: 150px;
+        }
+
+        /* پاسخ‌ها */
         .response {
-            padding: 8px;
+            padding: 15px;
             background: rgba(255, 255, 255, 0.1);
             border-radius: var(--radius);
-            margin-top: 8px;
+            margin-top: 15px;
+            text-align: center;
+            transition: var(--transition);
+            width: 100%;
+            overflow-y: auto;
         }
-        body.light .response { background: rgba(0, 0, 0, 0.05); }
-        .chat-section { padding: 10px; margin-top: -5px; width: 100%; }
-        .chat-box { display: flex; align-items: center; margin-bottom: 8px; }
-        #queryInput { flex-grow: 1; margin-<?= $lang === 'fa' ? 'left' : 'right' ?>: 8px; height: 30px; }
-        .send-btn { padding: 5px; background: none; height: 30px; margin-<?= $lang === 'fa' ? 'left' : 'right' ?>: 5px; }
+
+        body.light .response {
+            background: rgba(0, 0, 0, 0.05);
+        }
+
+        /* بخش چت */
+        .chat-section {
+            padding: 15px;
+            margin-top: -5px;
+            width: 100%;
+        }
+
+        .chat-box {
+            display: flex;
+            align-items: center;
+            margin-bottom: 15px;
+        }
+
+        #queryInput {
+            flex-grow: 1;
+            margin-<?= $lang === 'fa' ? 'left' : 'right' ?>: 10px;
+            height: 40px;
+        }
+
+        .send-btn {
+            padding: 0px;
+            height: 40px;
+            margin-<?= $lang === 'fa' ? 'left' : 'right' ?>: 3px;
+        }
+
         #response {
-            height: 50vh;
+            height: 70vh;
             overflow-y: auto;
             background: rgba(255, 255, 255, 0.1);
             border: 1px solid var(--dark-accent);
             border-radius: var(--radius);
-            padding: 8px;
+            padding: 15px;
         }
-        body.light #response { background: rgba(0, 0, 0, 0.05); border: 1px solid var(--light-accent); }
-        .answer { padding: 8px; }
-        .feedback { margin-top: 5px; }
+
+        body.light #response {
+            background: rgba(0, 0, 0, 0.05);
+            border: 1px solid var(--light-accent);
+        }
+
+        .answer {
+            padding: 10px;
+        }
+
+        .feedback {
+            margin-top: 8px;
+        }
+
         .feedback button {
             background: var(--dark-accent);
-            margin: 0 5px;
-            padding: 4px 8px;
+            margin: 0 8px;
+            padding: 6px 12px;
         }
-        body.light .feedback button { background: var(--light-accent); }
-        #correctionBox { display: none; margin-top: 5px; }
-        #correctionBox input { width: 60%; margin: 0 5px; }
-        #correctionBox button { background: var(--button); }
+
+        body.light .feedback button {
+            background: var(--light-accent);
+        }
+
+        #correctionBox {
+            display: none;
+            margin-top: 8px;
+        }
+
+        #correctionBox input {
+            width: 60%;
+            margin: 0 8px;
+        }
+
+        #correctionBox button {
+            background: var(--button);
+        }
+
+        /* مودال */
         .modal {
             display: none;
             position: fixed;
@@ -491,45 +632,82 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             background: rgba(0, 0, 0, 0.5);
             z-index: 1000;
         }
+
         .modal-content {
             background: var(--dark-frame);
             margin: 15% auto;
-            padding: 15px;
+            padding: 20px;
             width: 80%;
-            max-width: 350px;
+            max-width: 400px;
             border-radius: var(--radius);
             box-shadow: var(--shadow);
             text-align: center;
         }
-        body.light .modal-content { background: var(--light-frame); }
-        .modal-content input { margin: 8px 0; }
-        .modal-content button { width: 100%; margin: 8px 0; }
-        .processing { animation: blink 1s infinite; }
-        @keyframes blink { 50% { opacity: 0.5; } }
-        @media (max-width: 600px) {
-            .container { padding: 8px; }
-            .chat-section { padding: 8px; margin-top: -5px; }
-            .fetch-button { width: 60%; }
-            #response { height: 40vh; }
-            
-.response {
-        padding: 10px;
-        background: rgba(255, 255, 255, 0.1);
-        border-radius: 4px;
-        margin-top: 10px;
-        text-align: center;
-        # color: rgba(236, 240, 241, 0.6);
-        transition: var(--transition);
-        width: 100%; 
-        height: 100%;
-                    overflow-y: auto;
+
+        body.light .modal-content {
+            background: var(--light-frame);
         }
+
+        .modal-content input {
+            margin: 10px 0;
+        }
+
+        .modal-content button {
+            width: 100%;
+            margin: 10px 0;
+        }
+
+        /* انیمیشن پردازش */
+        .processing {
+            animation: blink 1s infinite;
+        }
+
+        @keyframes blink {
+            50% { opacity: 0.5; }
+        }
+
+        /* تنظیمات برای موبایل */
+        @media (max-width: 600px) {
+            .container {
+                padding: 10px;
+            }
+            .chat-section {
+                padding: 10px;
+            }
+            .fetch-button {
+                width: 70%;
+            }
+            #response {
+                height: 60vh;
+            }
             textarea {
-        width: 100%;
-        resize: vertical;
-             height: 50vh;
-    }
-    #response { height: 65vh; }
+                height: 100px;
+            }
+            .header-section .send-btn svg {
+                width: 15px;
+            }
+            #logo-icon {
+                width: 60px;
+                height: 60px;
+            }
+            .header {
+                flex-wrap: wrap;
+                gap: 10px;
+            }
+            select {
+                margin: 5px;
+            }
+            button {
+                width: 30px;
+            }
+        }
+
+        /* لینک‌ها */
+        a {
+            text-decoration: none;
+            color: #87ceeb;
+            transition: var(--transition);
+        }
     </style>
 </head>
 <body>
@@ -537,7 +715,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         <div class="header-section">
             <div class="header">
                 <h1>
-                    <svg id="logo-icon" version="1.0" xmlns="http://www.w3.org/2000/svg" width="48" height="48" viewBox="0 0 450 450" preserveAspectRatio="xMidYMid meet">
+                    <svg id="logo-icon" version="1.0" xmlns="http://www.w3.org/2000/svg" width="68" height="68" viewBox="0 0 450 450" preserveAspectRatio="xMidYMid meet">
                         <g transform="translate(0,450) scale(0.1,-0.1)" fill="<?= isset($_GET['theme']) && $_GET['theme'] === 'light' ? '#2c3e50' : '#e0e0e0' ?>" stroke="none">
                             <path d="M1741 3774 c-114 -30 -215 -106 -282 -210 -36 -54 -46 -64 -71 -64 -39 0 -141 -35 -191 -67 -146 -90 -236 -251 -238 -427 l0 -81 -52 -40 c-59 -47 -125 -139 -158 -222 -21 -50 -24 -75 -24 -188 0 -145 15 -198 79 -293 l32 -49 -17 -52 c-76 -221 14 -471 216 -601 l62 -41 6 -62 c10 -122 71 -244 170 -339 54 -52 165 -113 225 -124 25 -4 54 -23 89 -56 180 -169 478 -140 639 62 l30 38 23 -34 c45 -66 144 -133 233 -159 147 -42 297 -7 413 98 28 24 65 47 83 50 118 23 273 146 336 266 37 71 66 171 66 231 0 31 5 38 45 59 76 40 160 133 207 227 40 82 42 89 46 197 3 93 0 123 -17 177 -20 64 -20 66 -2 90 157 215 127 519 -70 705 l-69 65 -4 93 c-5 142 -60 263 -160 355 -60 56 -173 110 -246 118 -54 6 -57 8 -79 50 -37 68 -139 159 -226 201 -66 31 -89 36 -171 41 -157 8 -287 -43 -376 -147 l-36 -42 -22 32 c-36 50 -135 117 -207 139 -78 24 -202 26 -282 4z m288 -159 c64 -35 105 -82 131 -153 19 -50 20 -79 20 -490 0 -327 3 -441 12 -450 13 -13 96 -16 115 -4 9 6 13 123 15 457 3 435 4 452 24 496 33 70 86 123 155 154 55 24 71 27 143 23 68 -3 91 -10 144 -38 77 -41 154 -123 179 -190 l19 -51 75 -3 c164 -6 293 -113 335 -276 16 -62 15 -115 -2 -206 -5 -29 -2 -33 48 -61 110 -63 179 -163 201 -290 19 -117 -13 -223 -98 -322 -25 -30 -44 -56 -42 -60 55 -101 62 -127 62 -226 0 -93 -2 -105 -33 -167 -40 -81 -129 -168 -199 -194 -70 -26 -72 -27 -66 -93 18 -201 -138 -402 -332 -426 -48 -6 -57 -11 -76 -41 -24 -40 -88 -86 -143 -104 -53 -17 -161 -8 -212 18 -91 46 -144 112 -169 209 -11 42 -15 114 -15 270 l0 213 147 0 147 0 63 -62 c61 -60 62 -63 56 -104 -7 -55 1 -85 33 -123 54 -64 154 -63 213 4 56 65 50 147 -16 205 -32 28 -41 31 -95 29 -59 -3 -59 -2 -111 49 l-52 52 95 95 95 95 60 0 c56 -1 61 -3 80 -33 34 -54 82 -79 141 -75 149 12 201 192 81 282 -22 16 -43 21 -90 21 -68 0 -102 -17 -132 -67 -15 -27 -19 -28 -97 -28 l-81 0 -122 -120 -121 -120 -147 0 -147 0 0 115 c0 106 -2 115 -21 126 -28 15 -105 3 -113 -17 -3 -9 -6 -188 -6 -398 0 -459 0 -458 -93 -551 -72 -71 -127 -95 -221 -95 -83 0 -150 32 -205 98 -37 43 -49 51 -89 56 -117 17 -246 117 -300 233 -21 48 -27 76 -30 159 l-4 100 -64 28 c-207 90 -297 331 -200 531 14 28 26 55 26 59 0 4 -23 35 -50 69 -121 149 -119 361 4 511 18 23 63 59 100 80 l68 40 -9 35 c-4 20 -8 74 -8 121 0 71 5 95 27 142 60 128 178 209 310 212 l73 1 26 56 c45 96 116 163 218 206 81 34 194 29 270 -12z m1175 -1676 c34 -27 32 -64 -5 -92 -24 -17 -30 -18 -55 -6 -40 19 -47 79 -12 103 30 21 40 20 72 -5z"/>
                             <path d="M1825 3446 c-37 -16 -82 -67 -91 -102 -4 -14 -4 -42 0 -62 5 -37 3 -40 -84 -127 -86 -86 -91 -89 -130 -86 -70 5 -140 -60 -140 -128 0 -70 63 -131 135 -131 35 0 47 -6 83 -43 l42 -43 0 -82 0 -82 -112 0 -113 0 -20 37 c-52 96 -180 122 -261 51 -45 -40 -64 -77 -64 -128 0 -174 229 -242 320 -94 l22 34 114 0 114 0 0 -63 0 -62 -134 -134 -135 -134 -55 -1 c-62 -1 -99 -22 -130 -75 -54 -92 13 -213 118 -213 55 0 101 24 127 65 16 26 19 44 16 93 l-5 62 149 148 149 149 0 233 0 233 -47 50 -48 51 0 74 -1 73 81 81 80 80 36 -12 c108 -33 218 74 189 183 -26 94 -120 142 -205 105z m99 -102 c19 -19 21 -54 3 -78 -20 -27 -77 -18 -96 15 -13 24 -13 29 2 53 20 30 66 35 91 10z m-629 -779 c14 -13 25 -36 25 -50 0 -33 -41 -75 -73 -75 -40 0 -77 36 -77 76 0 69 76 99 125 49z"/>
@@ -553,14 +731,14 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                         <option value="fa" <?= $lang === 'fa' ? 'selected' : '' ?>>فارسی</option>
                         <option value="en" <?= $lang === 'en' ? 'selected' : '' ?>>English</option>
                     </select>
-                    <button class="send-btn" onclick="toggleTheme()">
+                    <button class="send-btn" onclick="toggleTheme()" style="width:30px;">
                         <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="var(--dark-text)"><path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"/></svg>
                     </button>
-                    <button class="send-btn" onclick="showLogin()">
+                    <button class="send-btn" onclick="showLogin()" style="width:30px;">
                         <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="var(--dark-text)"><path d="M12 12c2.21 0 4-1.79 4-4s-1.79-4-4-4-4 1.79-4 4 1.79 4 4 4zm0 2c-2.67 0-8 1.34-8 4v2h16v-2c0-2.66-5.33-4-8-4z"/></svg>
                     </button>
                     <?php if ($isLoggedIn): ?>
-                        <button class="send-btn" onclick="logout()" title="<?= $lang === 'fa' ? 'خروج' : 'Logout' ?>">
+                        <button class="send-btn" onclick="logout()" title="<?= $lang === 'fa' ? 'خروج' : 'Logout' ?>" style="width:30px;">
                             <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="var(--dark-text)"><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4M16 17l5-5-5-5M21 12H9"/></svg>
                         </button>
                     <?php endif; ?>
@@ -583,33 +761,34 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             </div>
         <?php endif; ?>
 
-    <div class="chat-section">
-        <div class="container1">
-            <div class="chat-box">
-                <input autocomplete="off" id="queryInput" type="text" placeholder="<?= $lang === 'fa' ? 'سوال خود را بپرسید' : 'Ask your question' ?>">
-                <button class="send-btn" onclick="getResponse()">
-                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="var(--dark-text)"><path d="M22 2L11 13M22 2l-7 20-4-9-9-4 20-7z"/></svg>
-                </button>
-                <button class="send-btn" onclick="toggleWiki()" title="Wikipedia">
-                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="<?= $useWikipedia ? '#00cc00' : 'var(--dark-text)' ?>">
-                        <path d="M12 2a10 10 0 110 20 10 10 0 010-20zm0 2a8 8 0 100 16 8 8 0 000-16zm-1 3v6l4 2-1 2-5-2V7h2z"/>
-                    </svg>
-                </button>
+        <div class="chat-section">
+            <div class="container1">
+                <div class="chat-box">
+                    <input value="&nbsp;" id="queryInput" type="text" placeholder="<?= $lang === 'fa' ? 'سوال خود را بپرسید' : 'Ask your question' ?>" autocomplete="off">
+                    <button class="send-btn" onclick="getResponse()" style="width:40px;">
+                        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="var(--dark-text)"><path d="M22 2L11 13M22 2l-7 20-4-9-9-4 20-7z"/></svg>
+                    </button>
+                    <button class="send-btn" onclick="toggleWiki()" title="Wikipedia" style="width:30px;">
+                        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="<?= $useWikipedia ? '#00cc00' : 'var(--dark-text)' ?>">
+                            <path d="M12 2a10 10 0 110 20 10 10 0 010-20zm0 2a8 8 0 100 16 8 8 0 000-16zm-1 3v6l4 2-1 2-5-2V7h2z"/>
+                        </svg>
+                    </button>
+                </div>
+                <div id="response" class="response"><?= $lang === 'fa' ? 'پاسخ اینجا ظاهر می‌شود' : 'Response will appear here' ?></div>
             </div>
-            <div id="response" class="response"><?= $lang === 'fa' ? 'پاسخ اینجا ظاهر می‌شود' : 'Response will appear here' ?></div>
         </div>
-    </div>
-    <div id="loginModal" class="modal" onclick="closeModal(event)">
-        <div class="modal-content">
-            <h2><?= $lang === 'fa' ? 'ورود' : 'Login' ?></h2>
-            <input id="username" type="text" placeholder="<?= $lang === 'fa' ? 'نام کاربری' : 'Username' ?>">
-            <input id="password" type="password" placeholder="<?= $lang === 'fa' ? 'رمز عبور' : 'Password' ?>">
-            <button onclick="login()"><?= $lang === 'fa' ? 'ورود' : 'Login' ?></button>
-            <?php if ($isLoggedIn): ?>
-                <h2><?= $lang === 'fa' ? 'تغییر رمز' : 'Change Password' ?></h2>
-                <input id="newPass" type="password" placeholder="<?= $lang === 'fa' ? 'رمز جدید' : 'New Password' ?>">
-                <button onclick="changePass()"><?= $lang === 'fa' ? 'تغییر' : 'Change' ?></button>
-            <?php endif; ?>
+        <div id="loginModal" class="modal" onclick="closeModal(event)">
+            <div class="modal-content">
+                <h2><?= $lang === 'fa' ? 'ورود' : 'Login' ?></h2>
+                <input id="username" type="text" placeholder="<?= $lang === 'fa' ? 'نام کاربری' : 'Username' ?>" autocomplete="new-username">
+                <input id="password" type="password" placeholder="<?= $lang === 'fa' ? 'رمز عبور' : 'Password' ?>" autocomplete="new-password">
+                <button onclick="login()"><?= $lang === 'fa' ? 'ورود' : 'Login' ?></button>
+                <?php if ($isLoggedIn): ?>
+                    <h2><?= $lang === 'fa' ? 'تغییر رمز' : 'Change Password' ?></h2>
+                    <input id="newPass" type="password" placeholder="<?= $lang === 'fa' ? 'رمز جدید' : 'New Password' ?>" autocomplete="new-password">
+                    <button onclick="changePass()"><?= $lang === 'fa' ? 'تغییر' : 'Change' ?></button>
+                <?php endif; ?>
+            </div>
         </div>
     </div>
     <script>
@@ -750,7 +929,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         function toggleTheme() {
             document.body.classList.toggle('light');
             localStorage.setItem('theme', document.body.classList.contains('light') ? 'light' : 'dark');
-            // تغییر رنگ آیکون برنامه
             const logoIcon = document.getElementById('logo-icon');
             if (document.body.classList.contains('light')) {
                 logoIcon.querySelector('g').setAttribute('fill', '#2c3e50');
