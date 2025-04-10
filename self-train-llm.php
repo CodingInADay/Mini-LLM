@@ -5,25 +5,43 @@ header('Content-Type: text/html; charset=UTF-8');
 define('DEFAULT_USER', 'admin');
 define('DEFAULT_PASS', 'admin');
 
-// اتصال به دیتابیس
-$db = new SQLite3('faradan.sqlite');
+// اتصال به دیتابیس با مدیریت خطا
+try {
+    $db = new SQLite3('faradan.sqlite');
+    $db->busyTimeout(5000); // 5 ثانیه تایم‌اوت برای قفل دیتابیس
+} catch (Exception $e) {
+    die("خطا در اتصال به دیتابیس: " . $e->getMessage());
+}
 
-// ساخت دیتابیس
-$db->exec("CREATE TABLE IF NOT EXISTS users (id INTEGER PRIMARY KEY AUTOINCREMENT, username TEXT NOT NULL UNIQUE, password TEXT NOT NULL)");
-$db->exec("CREATE TABLE IF NOT EXISTS pages (id INTEGER PRIMARY KEY AUTOINCREMENT, url TEXT NOT NULL UNIQUE, title TEXT, content TEXT, timestamp DATETIME DEFAULT CURRENT_TIMESTAMP)");
-$db->exec("CREATE TABLE IF NOT EXISTS knowledge (id INTEGER PRIMARY KEY AUTOINCREMENT, page_id INTEGER, sentence TEXT, timestamp DATETIME DEFAULT CURRENT_TIMESTAMP, FOREIGN KEY(page_id) REFERENCES pages(id))");
-$db->exec("CREATE TABLE IF NOT EXISTS word_index (id INTEGER PRIMARY KEY AUTOINCREMENT, word TEXT NOT NULL, knowledge_id INTEGER, frequency INTEGER DEFAULT 1, FOREIGN KEY(knowledge_id) REFERENCES knowledge(id))");
-$db->exec("CREATE TABLE IF NOT EXISTS feedback (id INTEGER PRIMARY KEY AUTOINCREMENT, knowledge_id INTEGER, rating INTEGER, FOREIGN KEY(knowledge_id) REFERENCES knowledge(id))");
-$db->exec("CREATE TABLE IF NOT EXISTS corrections (id INTEGER PRIMARY KEY AUTOINCREMENT, query TEXT NOT NULL UNIQUE, answer TEXT NOT NULL)");
-$db->exec("CREATE TABLE IF NOT EXISTS ngrams (word1 TEXT, word2 TEXT, word3 TEXT, count INTEGER DEFAULT 1)");
-$db->exec("CREATE INDEX IF NOT EXISTS idx_word ON word_index(word)");
+// ساخت دیتابیس (بدون تغییر)
+try {
+    $db->exec("CREATE TABLE IF NOT EXISTS users (id INTEGER PRIMARY KEY AUTOINCREMENT, username TEXT NOT NULL UNIQUE, password TEXT NOT NULL)");
+    $db->exec("CREATE TABLE IF NOT EXISTS pages (id INTEGER PRIMARY KEY AUTOINCREMENT, url TEXT NOT NULL UNIQUE, title TEXT, content TEXT, timestamp DATETIME DEFAULT CURRENT_TIMESTAMP)");
+    $db->exec("CREATE TABLE IF NOT EXISTS knowledge (id INTEGER PRIMARY KEY AUTOINCREMENT, page_id INTEGER, sentence TEXT, timestamp DATETIME DEFAULT CURRENT_TIMESTAMP, FOREIGN KEY(page_id) REFERENCES pages(id))");
+    $db->exec("CREATE TABLE IF NOT EXISTS word_index (id INTEGER PRIMARY KEY AUTOINCREMENT, word TEXT NOT NULL, knowledge_id INTEGER, frequency INTEGER DEFAULT 1, FOREIGN KEY(knowledge_id) REFERENCES knowledge(id))");
+    $db->exec("CREATE TABLE IF NOT EXISTS feedback (id INTEGER PRIMARY KEY AUTOINCREMENT, knowledge_id INTEGER, rating INTEGER, FOREIGN KEY(knowledge_id) REFERENCES knowledge(id))");
+    $db->exec("CREATE TABLE IF NOT EXISTS corrections (id INTEGER PRIMARY KEY AUTOINCREMENT, query TEXT NOT NULL UNIQUE, answer TEXT NOT NULL)");
+    $db->exec("CREATE TABLE IF NOT EXISTS ngrams (word1 TEXT, word2 TEXT, word3 TEXT, count INTEGER DEFAULT 1)");
+    $db->exec("CREATE TABLE IF NOT EXISTS co_occurrences (word1 TEXT NOT NULL, word2 TEXT NOT NULL, count INTEGER DEFAULT 1, PRIMARY KEY (word1, word2))");
+    $db->exec("CREATE INDEX IF NOT EXISTS idx_word ON word_index(word)");
+} catch (Exception $e) {
+    die("خطا در ایجاد جداول دیتابیس: " . $e->getMessage());
+}
 
-// کاربر اولیه
-$stmt = $db->prepare("SELECT COUNT(*) FROM users");
-$result = $stmt->execute()->fetchArray()[0];
-if ($result == 0) {
-    $hashedPass = password_hash(DEFAULT_PASS, PASSWORD_DEFAULT);
-    $db->exec("INSERT INTO users (username, password) VALUES ('" . DEFAULT_USER . "', '" . $hashedPass . "')");
+// کاربر اولیه با مدیریت خطا
+try {
+    $stmt = $db->prepare("SELECT COUNT(*) FROM users");
+    $result = $stmt->execute();
+    if ($result === false) {
+        die("خطا در اجرای کوئری SELECT COUNT(*) FROM users");
+    }
+    $count = $result->fetchArray()[0];
+    if ($count == 0) {
+        $hashedPass = password_hash(DEFAULT_PASS, PASSWORD_DEFAULT);
+        $db->exec("INSERT INTO users (username, password) VALUES ('" . DEFAULT_USER . "', '" . $hashedPass . "')");
+    }
+} catch (Exception $e) {
+    die("خطا در ایجاد کاربر اولیه: " . $e->getMessage());
 }
 
 // مدیریت سشن
@@ -34,192 +52,334 @@ $useWikipedia = isset($_SESSION['useWikipedia']) ? $_SESSION['useWikipedia'] : f
 // زبان
 $lang = isset($_GET['lang']) ? $_GET['lang'] : 'fa';
 
-// تابع پردازش محتوا
+// تابع پردازش محتوا (بدون تغییر)
 function fetchWebContent($fileContent, $url, $db) {
-    $stmt = $db->prepare("SELECT COUNT(*) FROM pages WHERE url = :url");
-    $stmt->bindValue(':url', $url, SQLITE3_TEXT);
-    if ($stmt->execute()->fetchArray()[0] > 0) return 'duplicate';
+    try {
+        $stmt = $db->prepare("SELECT COUNT(*) FROM pages WHERE url = :url");
+        $stmt->bindValue(':url', $url, SQLITE3_TEXT);
+        if ($stmt->execute()->fetchArray()[0] > 0) return 'duplicate';
 
-    $content = $fileContent;
-    $title = 'Uploaded File';
-    $text = html_entity_decode(strip_tags($content), ENT_QUOTES | ENT_HTML5, 'UTF-8');
-    $text = preg_replace('/[\n\r\t]+/', ' ', $text);
-    $text = preg_replace('/\s+/', ' ', trim($text));
+        $content = $fileContent;
+        $title = 'Uploaded File';
+        $text = html_entity_decode(strip_tags($content), ENT_QUOTES | ENT_HTML5, 'UTF-8');
+        $text = preg_replace('/[\n\r\t]+/', ' ', $text);
+        $text = preg_replace('/\s+/', ' ', trim($text));
 
-    $stmt = $db->prepare("INSERT INTO pages (url, title, content) VALUES (:url, :title, :content)");
-    $stmt->bindValue(':url', $url, SQLITE3_TEXT);
-    $stmt->bindValue(':title', $title, SQLITE3_TEXT);
-    $stmt->bindValue(':content', $text, SQLITE3_TEXT);
-    $stmt->execute();
+        $stmt = $db->prepare("INSERT INTO pages (url, title, content) VALUES (:url, :title, :content)");
+        $stmt->bindValue(':url', $url, SQLITE3_TEXT);
+        $stmt->bindValue(':title', $title, SQLITE3_TEXT);
+        $stmt->bindValue(':content', $text, SQLITE3_TEXT);
+        $stmt->execute();
 
-    $pageId = $db->lastInsertRowID();
-    $sentences = preg_split('/[.!?]+/', $text);
-    foreach ($sentences as $sentence) {
-        $sentence = trim($sentence);
-        if (strlen($sentence) > 10) {
-            $stmt = $db->prepare("INSERT INTO knowledge (page_id, sentence) VALUES (:page_id, :sentence)");
-            $stmt->bindValue(':page_id', $pageId, SQLITE3_INTEGER);
-            $stmt->bindValue(':sentence', $sentence, SQLITE3_TEXT);
-            $stmt->execute();
+        $pageId = $db->lastInsertRowID();
+        $sentences = preg_split('/[.!?]+/', $text);
+        foreach ($sentences as $sentence) {
+            $sentence = trim($sentence);
+            if (strlen($sentence) > 10) {
+                $stmt = $db->prepare("INSERT INTO knowledge (page_id, sentence) VALUES (:page_id, :sentence)");
+                $stmt->bindValue(':page_id', $pageId, SQLITE3_INTEGER);
+                $stmt->bindValue(':sentence', $sentence, SQLITE3_TEXT);
+                $stmt->execute();
 
-            $knowledgeId = $db->lastInsertRowID();
-            $words = preg_split('/\s+/', $sentence);
-            foreach ($words as $i => $word) {
-                $word = trim($word, ".,!?");
-                if (strlen($word) > 2) {
-                    $stmt = $db->prepare("INSERT OR IGNORE INTO word_index (word, knowledge_id) VALUES (:word, :knowledge_id)");
-                    $stmt->bindValue(':word', $word, SQLITE3_TEXT);
-                    $stmt->bindValue(':knowledge_id', $knowledgeId, SQLITE3_INTEGER);
-                    $stmt->execute();
-                    $stmt = $db->prepare("UPDATE word_index SET frequency = frequency + 1 WHERE word = :word AND knowledge_id = :knowledge_id");
-                    $stmt->bindValue(':word', $word, SQLITE3_TEXT);
-                    $stmt->bindValue(':knowledge_id', $knowledgeId, SQLITE3_INTEGER);
-                    $stmt->execute();
-                    if (isset($words[$i + 1]) && isset($words[$i + 2])) {
-                        $word2 = trim($words[$i + 1], ".,!?");
-                        $word3 = trim($words[$i + 2], ".,!?");
-                        if (strlen($word2) > 2 && strlen($word3) > 2) {
-                            $stmt = $db->prepare("INSERT OR IGNORE INTO ngrams (word1, word2, word3) VALUES (:word1, :word2, :word3)");
-                            $stmt->bindValue(':word1', $word, SQLITE3_TEXT);
-                            $stmt->bindValue(':word2', $word2, SQLITE3_TEXT);
-                            $stmt->bindValue(':word3', $word3, SQLITE3_TEXT);
-                            $stmt->execute();
-                            $stmt = $db->prepare("UPDATE ngrams SET count = count + 1 WHERE word1 = :word1 AND word2 = :word2 AND word3 = :word3");
-                            $stmt->bindValue(':word1', $word, SQLITE3_TEXT);
-                            $stmt->bindValue(':word2', $word2, SQLITE3_TEXT);
-                            $stmt->bindValue(':word3', $word3, SQLITE3_TEXT);
-                            $stmt->execute();
+                $knowledgeId = $db->lastInsertRowID();
+                $words = preg_split('/\s+/', $sentence);
+                $uniqueWords = [];
+                foreach ($words as $word) {
+                    $word = trim($word, ".,!?");
+                    if (strlen($word) > 2) {
+                        $uniqueWords[$word] = true;
+                        $stmt = $db->prepare("INSERT OR IGNORE INTO word_index (word, knowledge_id) VALUES (:word, :knowledge_id)");
+                        $stmt->bindValue(':word', $word, SQLITE3_TEXT);
+                        $stmt->bindValue(':knowledge_id', $knowledgeId, SQLITE3_INTEGER);
+                        $stmt->execute();
+                        $stmt = $db->prepare("UPDATE word_index SET frequency = frequency + 1 WHERE word = :word AND knowledge_id = :knowledge_id");
+                        $stmt->bindValue(':word', $word, SQLITE3_TEXT);
+                        $stmt->bindValue(':knowledge_id', $knowledgeId, SQLITE3_INTEGER);
+                        $stmt->execute();
+                    }
+                }
+
+                $wordList = array_keys($uniqueWords);
+                for ($i = 0; $i < count($wordList); $i++) {
+                    for ($j = $i + 1; $j < count($wordList); $j++) {
+                        $word1 = $wordList[$i] < $wordList[$j] ? $wordList[$i] : $wordList[$j];
+                        $word2 = $wordList[$i] < $wordList[$j] ? $wordList[$j] : $wordList[$i];
+                        $stmt = $db->prepare("INSERT OR IGNORE INTO co_occurrences (word1, word2, count) VALUES (:word1, :word2, 0)");
+                        $stmt->bindValue(':word1', $word1, SQLITE3_TEXT);
+                        $stmt->bindValue(':word2', $word2, SQLITE3_TEXT);
+                        $stmt->execute();
+                        $stmt = $db->prepare("UPDATE co_occurrences SET count = count + 1 WHERE word1 = :word1 AND word2 = :word2");
+                        $stmt->bindValue(':word1', $word1, SQLITE3_TEXT);
+                        $stmt->bindValue(':word2', $word2, SQLITE3_TEXT);
+                        $stmt->execute();
+                    }
+                }
+
+                foreach ($words as $i => $word) {
+                    $word = trim($word, ".,!?");
+                    if (strlen($word) > 2) {
+                        if (isset($words[$i + 1]) && isset($words[$i + 2])) {
+                            $word2 = trim($words[$i + 1], ".,!?");
+                            $word3 = trim($words[$i + 2], ".,!?");
+                            if (strlen($word2) > 2 && strlen($word3) > 2) {
+                                $stmt = $db->prepare("INSERT OR IGNORE INTO ngrams (word1, word2, word3) VALUES (:word1, :word2, :word3)");
+                                $stmt->bindValue(':word1', $word, SQLITE3_TEXT);
+                                $stmt->bindValue(':word2', $word2, SQLITE3_TEXT);
+                                $stmt->bindValue(':word3', $word3, SQLITE3_TEXT);
+                                $stmt->execute();
+                                $stmt = $db->prepare("UPDATE ngrams SET count = count + 1 WHERE word1 = :word1 AND word2 = :word2 AND word3 = :word3");
+                                $stmt->bindValue(':word1', $word, SQLITE3_TEXT);
+                                $stmt->bindValue(':word2', $word2, SQLITE3_TEXT);
+                                $stmt->bindValue(':word3', $word3, SQLITE3_TEXT);
+                                $stmt->execute();
+                            }
                         }
                     }
                 }
             }
         }
+        return true;
+    } catch (Exception $e) {
+        return 'error';
     }
-    return true;
 }
 
-// تابع گرفتن دیتا از ویکی‌پدیا
+// تابع گرفتن دیتا از ویکی‌پدیا با مدیریت خطا
 function getWikipediaData($query, $lang) {
     $url = "https://$lang.wikipedia.org/w/api.php?action=query&prop=extracts&exintro&explaintext&titles=" . urlencode($query) . "&format=json";
-    $response = @file_get_contents($url);
-    if ($response) {
-        $data = json_decode($response, true);
-        $pages = $data['query']['pages'] ?? [];
-        foreach ($pages as $page) {
-            if (isset($page['extract'])) {
-                return substr($page['extract'], 0, );
-            }
+    $context = stream_context_create([
+        'http' => [
+            'timeout' => 5 // حداکثر 5 ثانیه صبر کن
+        ]
+    ]);
+    $response = @file_get_contents($url, false, $context);
+    if ($response === false) {
+        return null; // اگه درخواست شکست خورد، بدون خطا برگردون null
+    }
+    $data = json_decode($response, true);
+    $pages = $data['query']['pages'] ?? [];
+    foreach ($pages as $page) {
+        if (isset($page['extract'])) {
+            return substr($page['extract'], 0,  );
         }
     }
     return null;
 }
 
-// تابع تولید متن
+// تابع تولید متن با قابلیت تولید جواب‌های متعدد
 function generateText($query, $db, $lang) {
-    $tokenCount = $db->querySingle("SELECT COUNT(DISTINCT word) FROM word_index");
-    if ($tokenCount < 10) return null;
+    try {
+        $tokenCount = $db->querySingle("SELECT COUNT(DISTINCT word) FROM word_index");
+        if ($tokenCount < 10) return null;
 
-    $words = preg_split('/\s+/', $query);
-    $startWord = null;
-    $maxFreq = 0;
-    foreach ($words as $word) {
-        $word = trim($word, ".,!?");
-        if (strlen($word) > 2) {
-            $stmt = $db->prepare("SELECT SUM(frequency) as freq FROM word_index WHERE word = :word");
-            $stmt->bindValue(':word', $word, SQLITE3_TEXT);
-            $freq = $stmt->execute()->fetchArray(SQLITE3_ASSOC)['freq'] ?? 0;
-            if ($freq > $maxFreq) {
-                $maxFreq = $freq;
-                $startWord = $word;
+        if (!isset($_SESSION['generated_answers'])) {
+            $_SESSION['generated_answers'] = [];
+        }
+        $generatedAnswers = &$_SESSION['generated_answers'];
+
+        $words = preg_split('/\s+/', $query);
+        $startWord = null;
+        $maxFreq = 0;
+        foreach ($words as $word) {
+            $word = trim($word, ".,!?");
+            if (strlen($word) > 2) {
+                $stmt = $db->prepare("SELECT SUM(frequency) as freq FROM word_index WHERE word = :word");
+                $stmt->bindValue(':word', $word, SQLITE3_TEXT);
+                $freq = $stmt->execute()->fetchArray(SQLITE3_ASSOC)['freq'] ?? 0;
+                if ($freq > $maxFreq) {
+                    $maxFreq = $freq;
+                    $startWord = $word;
+                }
             }
         }
-    }
-    if (!$startWord) $startWord = $words[0] ?? '';
+        if (!$startWord) $startWord = $words[0] ?? '';
 
-    $sentence = [$startWord];
-    $currentWord1 = $startWord;
-    $currentWord2 = null;
+        $attempts = 0;
+        $maxAttempts = 20;
 
-    for ($i = 0; $i < 9; $i++) {
-        if (!$currentWord2) {
-            $stmt = $db->prepare("SELECT word2 FROM ngrams WHERE word1 = :word1 ORDER BY count DESC, RANDOM() LIMIT 1");
-            $stmt->bindValue(':word1', $currentWord1, SQLITE3_TEXT);
-            $result = $stmt->execute()->fetchArray(SQLITE3_ASSOC);
-            if ($result) {
-                $currentWord2 = $result['word2'];
-                $sentence[] = $currentWord2;
-            } else {
-                break;
+        while ($attempts < $maxAttempts) {
+            $sentence = [$startWord];
+            $currentWord1 = $startWord;
+            $currentWord2 = null;
+
+            for ($i = 0; $i < 9; $i++) {
+                if (!$currentWord2) {
+                    $stmt = $db->prepare("SELECT word2 FROM ngrams WHERE word1 = :word1 ORDER BY count DESC, RANDOM() LIMIT 1");
+                    $stmt->bindValue(':word1', $currentWord1, SQLITE3_TEXT);
+                    $result = $stmt->execute()->fetchArray(SQLITE3_ASSOC);
+                    if ($result) {
+                        $currentWord2 = $result['word2'];
+                        $sentence[] = $currentWord2;
+                    } else {
+                        break;
+                    }
+                } else {
+                    $stmt = $db->prepare("SELECT word3 FROM ngrams WHERE word1 = :word1 AND word2 = :word2 ORDER BY count DESC, RANDOM() LIMIT 1");
+                    $stmt->bindValue(':word1', $currentWord1, SQLITE3_TEXT);
+                    $stmt->bindValue(':word2', $currentWord2, SQLITE3_TEXT);
+                    $result = $stmt->execute()->fetchArray(SQLITE3_ASSOC);
+                    if ($result) {
+                        $nextWord = $result['word3'];
+                        $sentence[] = $nextWord;
+                        $currentWord1 = $currentWord2;
+                        $currentWord2 = $nextWord;
+                    } else {
+                        break;
+                    }
+                }
             }
-        } else {
-            $stmt = $db->prepare("SELECT word3 FROM ngrams WHERE word1 = :word1 AND word2 = :word2 ORDER BY count DESC, RANDOM() LIMIT 1");
-            $stmt->bindValue(':word1', $currentWord1, SQLITE3_TEXT);
-            $stmt->bindValue(':word2', $currentWord2, SQLITE3_TEXT);
-            $result = $stmt->execute()->fetchArray(SQLITE3_ASSOC);
-            if ($result) {
-                $nextWord = $result['word3'];
-                $sentence[] = $nextWord;
-                $currentWord1 = $currentWord2;
-                $currentWord2 = $nextWord;
-            } else {
-                break;
+
+            $isFarsiQuery = preg_match('/[\x{0600}-\x{06FF}]/u', $query);
+            $finalSentence = [];
+            foreach ($sentence as $word) {
+                $isFarsiWord = preg_match('/[\x{0600}-\x{06FF}]/u', $word);
+                if (($isFarsiQuery && $isFarsiWord) || (!$isFarsiQuery && !$isFarsiWord)) {
+                    $finalSentence[] = $word;
+                }
             }
-        }
-    }
 
-    $isFarsiQuery = preg_match('/[\x{0600}-\x{06FF}]/u', $query);
-    $finalSentence = [];
-    foreach ($sentence as $word) {
-        $isFarsiWord = preg_match('/[\x{0600}-\x{06FF}]/u', $word);
-        if (($isFarsiQuery && $isFarsiWord) || (!$isFarsiQuery && !$isFarsiWord)) {
-            $finalSentence[] = $word;
+            $finalText = count($finalSentence) > 1 ? implode(' ', $finalSentence) : null;
+            if ($finalText && !in_array($finalText, $generatedAnswers)) {
+                $generatedAnswers[] = $finalText;
+                return $finalText;
+            }
+            $attempts++;
         }
-    }
 
-    return count($finalSentence) > 1 ? implode(' ', $finalSentence) : null;
+        return null;
+    } catch (Exception $e) {
+        return null;
+    }
 }
 
-// تابع جستجوی پاسخ
+// تابع جستجوی پاسخ (بدون تغییر زیاد، فقط مدیریت null از ویکی‌پدیا)
 function getAnswer($query, $db, $lang, $useWikipedia, $isLoggedIn, &$moreAvailable = false, &$knowledgeId = null, $usedIds = []) {
-    $query = trim($query);
-    $stmt = $db->prepare("SELECT answer FROM corrections WHERE query = :query");
-    $stmt->bindValue(':query', $query, SQLITE3_TEXT);
-    $result = $stmt->execute()->fetchArray(SQLITE3_ASSOC);
-    if ($result) {
-        $moreAvailable = $db->querySingle("SELECT COUNT(*) FROM knowledge WHERE sentence LIKE '%" . $db->escapeString($query) . "%'") > 0;
-        return $result['answer'] . ($moreAvailable ? ' <a href="#" onclick="getMore(event)">[...]</a>' : '');
-    }
-
-    $words = preg_split('/\s+/', $query);
-    $stopWords = $lang === 'fa' ? ['کجاست', 'چیست', 'چه', 'کیست', 'است', 'در', 'با', 'به'] : ['where', 'is', 'what', 'who', 'a', 'an', 'the', 'in', 'on', 'at'];
-    $keywords = array_filter($words, fn($word) => !in_array($word, $stopWords));
-
-    if (empty($keywords)) return $lang === 'fa' ? 'دانشم کافی نیست!' : 'My knowledge is not enough!';
-
-    $conditions = array_map(fn($keyword) => "word LIKE '%" . $db->escapeString($keyword) . "%'", $keywords);
-    $whereClause = implode(' OR ', $conditions);
-
-    $sql = "SELECT DISTINCT knowledge_id FROM word_index WHERE " . $whereClause;
-    $result = $db->query($sql);
-    $knowledgeIds = [];
-    while ($row = $result->fetchArray(SQLITE3_ASSOC)) {
-        if (!in_array($row['knowledge_id'], $usedIds)) {
-            $knowledgeIds[] = $row['knowledge_id'];
+    try {
+        $query = trim($query);
+        $stmt = $db->prepare("SELECT answer FROM corrections WHERE query = :query");
+        $stmt->bindValue(':query', $query, SQLITE3_TEXT);
+        $result = $stmt->execute()->fetchArray(SQLITE3_ASSOC);
+        if ($result) {
+            $moreAvailable = $db->querySingle("SELECT COUNT(*) FROM knowledge WHERE sentence LIKE '%" . $db->escapeString($query) . "%'") > 0;
+            return $result['answer'] . ($moreAvailable ? ' <a href="#" onclick="getMore(event)">[...]</a>' : '');
         }
-    }
 
-    if (empty($knowledgeIds)) {
-        if ($useWikipedia) {
-            $wikiAnswer = getWikipediaData($query, $lang);
-            if ($wikiAnswer) {
-                if ($isLoggedIn) {
-                    $url = 'wiki_' . time();
-                    fetchWebContent($wikiAnswer, $url, $db);
-                }
-                $moreAvailable = $db->querySingle("SELECT COUNT(*) FROM knowledge WHERE sentence LIKE '%" . $db->escapeString($query) . "%'") > 0;
-                return $wikiAnswer . ($moreAvailable ? ' <a href="#" onclick="getMore(event)">[...]</a>' : '');
+        $words = preg_split('/\s+/', $query);
+        $stopWords = $lang === 'fa' ? ['کجاست', 'چیست', 'چه', 'کیست', 'است', 'در', 'با', 'به'] : ['where', 'is', 'what', 'who', 'a', 'an', 'the', 'in', 'on', 'at'];
+        $keywords = array_filter($words, fn($word) => !in_array($word, $stopWords));
+
+        if (empty($keywords)) return $lang === 'fa' ? 'دانشم کافی نیست!' : 'My knowledge is not enough!';
+
+        $conditions = array_map(fn($keyword) => "word LIKE '%" . $db->escapeString($keyword) . "%'", $keywords);
+        $whereClause = implode(' OR ', $conditions);
+
+        $sql = "SELECT DISTINCT knowledge_id FROM word_index WHERE " . $whereClause;
+        $result = $db->query($sql);
+        $knowledgeIds = [];
+        while ($row = $result->fetchArray(SQLITE3_ASSOC)) {
+            if (!in_array($row['knowledge_id'], $usedIds)) {
+                $knowledgeIds[] = $row['knowledge_id'];
             }
         }
+
+        if (empty($knowledgeIds)) {
+            if ($useWikipedia) {
+                $wikiAnswer = getWikipediaData($query, $lang);
+                if ($wikiAnswer) {
+                    if ($isLoggedIn) {
+                        $url = 'wiki_' . time();
+                        fetchWebContent($wikiAnswer, $url, $db);
+                    }
+                    $moreAvailable = $db->querySingle("SELECT COUNT(*) FROM knowledge WHERE sentence LIKE '%" . $db->escapeString($query) . "%'") > 0;
+                    return $wikiAnswer . ($moreAvailable ? ' <a href="#" onclick="getMore(event)">[...]</a>' : '');
+                }
+            }
+            $generated = generateText($query, $db, $lang);
+            $moreAvailable = $useWikipedia || $generated;
+            if ($generated) {
+                $stmt = $db->prepare("INSERT INTO knowledge (page_id, sentence) VALUES (0, :sentence)");
+                $stmt->bindValue(':sentence', $generated, SQLITE3_TEXT);
+                $stmt->execute();
+                $knowledgeId = $db->lastInsertRowID();
+
+                $words = preg_split('/\s+/', $generated);
+                $uniqueWords = [];
+                foreach ($words as $word) {
+                    $word = trim($word, ".,!?");
+                    if (strlen($word) > 2) {
+                        $uniqueWords[$word] = true;
+                        $stmt = $db->prepare("INSERT OR IGNORE INTO word_index (word, knowledge_id) VALUES (:word, :knowledge_id)");
+                        $stmt->bindValue(':word', $word, SQLITE3_TEXT);
+                        $stmt->bindValue(':knowledge_id', $knowledgeId, SQLITE3_INTEGER);
+                        $stmt->execute();
+                        $stmt = $db->prepare("UPDATE word_index SET frequency = frequency + 1 WHERE word = :word AND knowledge_id = :knowledge_id");
+                        $stmt->bindValue(':word', $word, SQLITE3_TEXT);
+                        $stmt->bindValue(':knowledge_id', $knowledgeId, SQLITE3_INTEGER);
+                        $stmt->execute();
+                    }
+                }
+
+                $wordList = array_keys($uniqueWords);
+                for ($i = 0; $i < count($wordList); $i++) {
+                    for ($j = $i + 1; $j < count($wordList); $j++) {
+                        $word1 = $wordList[$i] < $wordList[$j] ? $wordList[$i] : $wordList[$j];
+                        $word2 = $wordList[$i] < $wordList[$j] ? $wordList[$j] : $wordList[$i];
+                        $stmt = $db->prepare("INSERT OR IGNORE INTO co_occurrences (word1, word2, count) VALUES (:word1, :word2, 0)");
+                        $stmt->bindValue(':word1', $word1, SQLITE3_TEXT);
+                        $stmt->bindValue(':word2', $word2, SQLITE3_TEXT);
+                        $stmt->execute();
+                        $stmt = $db->prepare("UPDATE co_occurrences SET count = count + 1 WHERE word1 = :word1 AND word2 = :word2");
+                        $stmt->bindValue(':word1', $word1, SQLITE3_TEXT);
+                        $stmt->bindValue(':word2', $word2, SQLITE3_TEXT);
+                        $stmt->execute();
+                    }
+                }
+
+                $label = ($lang === 'fa' ? ' [جدید]' : ' [New]');
+                return $generated . $label . ($moreAvailable ? ' <a href="#" onclick="getMore(event)">[...]</a>' : '');
+            }
+            return ($lang === 'fa' ? 'دانشم کافی نیست!' : 'My knowledge is not enough!') . ($moreAvailable ? ' <a href="#" onclick="getMore(event)">[...]</a>' : '');
+        }
+
+        $idList = implode(',', $knowledgeIds);
+        $result = $db->query("SELECT k.id, k.sentence, COALESCE(SUM(f.rating), 0) as rating 
+                              FROM knowledge k 
+                              LEFT JOIN feedback f ON k.id = f.knowledge_id 
+                              WHERE k.id IN ($idList) 
+                              GROUP BY k.id, k.sentence");
+        $sentences = [];
+        while ($row = $result->fetchArray(SQLITE3_ASSOC)) {
+            $sentence = $row['sentence'];
+            $score = 0;
+            $orderScore = 0;
+            $pos = -1;
+
+            foreach ($keywords as $keyword) {
+                if (stripos($sentence, $keyword) !== false) {
+                    $score += 2;
+                    $newPos = stripos($sentence, $keyword);
+                    if ($pos < $newPos) $orderScore += 0.5;
+                    $pos = $newPos;
+                }
+            }
+
+            $sentences[] = [
+                'id' => $row['id'],
+                'sentence' => $sentence,
+                'score' => $score + $orderScore + ($row['rating'] * 2)
+            ];
+        }
+
+        usort($sentences, fn($a, $b) => $b['score'] <=> $a['score']);
+
+        $moreAvailable = count($sentences) > 1 || $useWikipedia;
+        $selected = $sentences[0] ?? null;
+        if ($selected) {
+            $knowledgeId = $selected['id'];
+            $sentence = htmlspecialchars($selected['sentence']);
+            return $sentence . ($moreAvailable ? ' <a href="#" onclick="getMore(event)">[...]</a>' : '');
+        }
+
         $generated = generateText($query, $db, $lang);
         $moreAvailable = $useWikipedia || $generated;
         if ($generated) {
@@ -229,9 +389,11 @@ function getAnswer($query, $db, $lang, $useWikipedia, $isLoggedIn, &$moreAvailab
             $knowledgeId = $db->lastInsertRowID();
 
             $words = preg_split('/\s+/', $generated);
+            $uniqueWords = [];
             foreach ($words as $word) {
                 $word = trim($word, ".,!?");
                 if (strlen($word) > 2) {
+                    $uniqueWords[$word] = true;
                     $stmt = $db->prepare("INSERT OR IGNORE INTO word_index (word, knowledge_id) VALUES (:word, :knowledge_id)");
                     $stmt->bindValue(':word', $word, SQLITE3_TEXT);
                     $stmt->bindValue(':knowledge_id', $knowledgeId, SQLITE3_INTEGER);
@@ -243,201 +405,284 @@ function getAnswer($query, $db, $lang, $useWikipedia, $isLoggedIn, &$moreAvailab
                 }
             }
 
+            $wordList = array_keys($uniqueWords);
+            for ($i = 0; $i < count($wordList); $i++) {
+                for ($j = $i + 1; $j < count($wordList); $j++) {
+                    $word1 = $wordList[$i] < $wordList[$j] ? $wordList[$i] : $wordList[$j];
+                    $word2 = $wordList[$i] < $wordList[$j] ? $wordList[$j] : $wordList[$i];
+                    $stmt = $db->prepare("INSERT OR IGNORE INTO co_occurrences (word1, word2, count) VALUES (:word1, :word2, 0)");
+                    $stmt->bindValue(':word1', $word1, SQLITE3_TEXT);
+                    $stmt->bindValue(':word2', $word2, SQLITE3_TEXT);
+                    $stmt->execute();
+                    $stmt = $db->prepare("UPDATE co_occurrences SET count = count + 1 WHERE word1 = :word1 AND word2 = :word2");
+                    $stmt->bindValue(':word1', $word1, SQLITE3_TEXT);
+                    $stmt->bindValue(':word2', $word2, SQLITE3_TEXT);
+                    $stmt->execute();
+                }
+            }
+
             $label = ($lang === 'fa' ? ' [جدید]' : ' [New]');
             return $generated . $label . ($moreAvailable ? ' <a href="#" onclick="getMore(event)">[...]</a>' : '');
         }
         return ($lang === 'fa' ? 'دانشم کافی نیست!' : 'My knowledge is not enough!') . ($moreAvailable ? ' <a href="#" onclick="getMore(event)">[...]</a>' : '');
+    } catch (Exception $e) {
+        return $lang === 'fa' ? 'خطا در جستجو!' : 'Error in search!';
     }
+}
 
-    $idList = implode(',', $knowledgeIds);
-    $result = $db->query("SELECT k.id, k.sentence, COALESCE(SUM(f.rating), 0) as rating 
-                          FROM knowledge k 
-                          LEFT JOIN feedback f ON k.id = f.knowledge_id 
-                          WHERE k.id IN ($idList) 
-                          GROUP BY k.id, k.sentence");
-    $sentences = [];
-    while ($row = $result->fetchArray(SQLITE3_ASSOC)) {
-        $sentence = $row['sentence'];
-        $score = 0;
-        $orderScore = 0;
-        $pos = -1;
+// توابع آمار (بدون تغییر)
+function getSentenceCount($db) {
+    try {
+        return $db->querySingle("SELECT COUNT(*) FROM knowledge") ?? 0;
+    } catch (Exception $e) {
+        return 0;
+    }
+}
 
-        foreach ($keywords as $keyword) {
-            if (stripos($sentence, $keyword) !== false) {
-                $score += 2;
-                $newPos = stripos($sentence, $keyword);
-                if ($pos < $newPos) $orderScore += 0.5;
-                $pos = $newPos;
-            }
+function getNgramCount($db) {
+    try {
+        return $db->querySingle("SELECT COUNT(*) FROM ngrams") ?? 0;
+    } catch (Exception $e) {
+        return 0;
+    }
+}
+
+function getTopCoOccurrences($db, $limit = 5, $offset = 0) {
+    try {
+        $result = $db->query("SELECT word1, word2, count FROM co_occurrences ORDER BY count DESC LIMIT $limit OFFSET $offset");
+        $coOccurrences = [];
+        while ($row = $result->fetchArray(SQLITE3_ASSOC)) {
+            $pair = $row['word1'] . '-' . $row['word2'];
+            $coOccurrences[$pair] = $row['count'];
         }
-
-        $sentences[] = [
-            'id' => $row['id'],
-            'sentence' => $sentence,
-            'score' => $score + $orderScore + ($row['rating'] * 2)
-        ];
+        $total = $db->querySingle("SELECT COUNT(*) FROM co_occurrences");
+        return ['data' => $coOccurrences, 'total' => $total];
+    } catch (Exception $e) {
+        return ['data' => [], 'total' => 0];
     }
-
-    usort($sentences, fn($a, $b) => $b['score'] <=> $a['score']);
-
-    $moreAvailable = count($sentences) > 1 || $useWikipedia;
-    $selected = $sentences[0] ?? null;
-    if ($selected) {
-        $knowledgeId = $selected['id'];
-        $sentence = htmlspecialchars($selected['sentence']);
-        return $sentence . ($moreAvailable ? ' <a href="#" onclick="getMore(event)">[...]</a>' : '');
-    }
-
-    $generated = generateText($query, $db, $lang);
-    $moreAvailable = $useWikipedia || $generated;
-    if ($generated) {
-        $stmt = $db->prepare("INSERT INTO knowledge (page_id, sentence) VALUES (0, :sentence)");
-        $stmt->bindValue(':sentence', $generated, SQLITE3_TEXT);
-        $stmt->execute();
-        $knowledgeId = $db->lastInsertRowID();
-
-        $words = preg_split('/\s+/', $generated);
-        foreach ($words as $word) {
-            $word = trim($word, ".,!?");
-            if (strlen($word) > 2) {
-                $stmt = $db->prepare("INSERT OR IGNORE INTO word_index (word, knowledge_id) VALUES (:word, :knowledge_id)");
-                $stmt->bindValue(':word', $word, SQLITE3_TEXT);
-                $stmt->bindValue(':knowledge_id', $knowledgeId, SQLITE3_INTEGER);
-                $stmt->execute();
-                $stmt = $db->prepare("UPDATE word_index SET frequency = frequency + 1 WHERE word = :word AND knowledge_id = :knowledge_id");
-                $stmt->bindValue(':word', $word, SQLITE3_TEXT);
-                $stmt->bindValue(':knowledge_id', $knowledgeId, SQLITE3_INTEGER);
-                $stmt->execute();
-            }
-        }
-
-        $label = ($lang === 'fa' ? ' [جدید]' : ' [New]');
-        return $generated . $label . ($moreAvailable ? ' <a href="#" onclick="getMore(event)">[...]</a>' : '');
-    }
-    return ($lang === 'fa' ? 'دانشم کافی نیست!' : 'My knowledge is not enough!') . ($moreAvailable ? ' <a href="#" onclick="getMore(event)">[...]</a>' : '');
 }
 
 // تعداد توکن‌ها
-$tokenCount = $db->querySingle("SELECT COUNT(DISTINCT word) FROM word_index");
+try {
+    $tokenCount = $db->querySingle("SELECT COUNT(DISTINCT word) FROM word_index") ?? 0;
+} catch (Exception $e) {
+    $tokenCount = 0;
+}
+
+$currentSentenceCount = getSentenceCount($db);
+$ngramCount = getNgramCount($db);
+
+$coOffset = isset($_POST['coOffset']) ? (int)$_POST['coOffset'] : 0;
+$coLimit = 5;
+$topCoOccurrencesData = getTopCoOccurrences($db, $coLimit, $coOffset);
+$topCoOccurrences = $topCoOccurrencesData['data'];
+$coTotal = $topCoOccurrencesData['total'];
 
 // پردازش درخواست‌ها
 if ($_SERVER['REQUEST_METHOD'] === 'POST') {
-    if (isset($_POST['login'])) {
-        $username = trim($_POST['username'] ?? '');
-        $password = trim($_POST['password'] ?? '');
-        $stmt = $db->prepare("SELECT password FROM users WHERE username = :username");
-        $stmt->bindValue(':username', $username, SQLITE3_TEXT);
-        $result = $stmt->execute()->fetchArray(SQLITE3_ASSOC);
-        if ($result && password_verify($password, $result['password'])) {
-            $_SESSION['loggedin'] = true;
+    try {
+        if (isset($_POST['login'])) {
+            $username = trim($_POST['username'] ?? '');
+            $password = trim($_POST['password'] ?? '');
+            $stmt = $db->prepare("SELECT password FROM users WHERE username = :username");
+            $stmt->bindValue(':username', $username, SQLITE3_TEXT);
+            $result = $stmt->execute()->fetchArray(SQLITE3_ASSOC);
+            if ($result && password_verify($password, $result['password'])) {
+                $_SESSION['loggedin'] = true;
+                echo 'success';
+            } else {
+                echo 'error';
+            }
+            exit;
+        } elseif (isset($_POST['logout'])) {
+            session_destroy();
             echo 'success';
-        } else {
-            echo 'error';
-        }
-        exit;
-    } elseif (isset($_POST['logout'])) {
-        session_destroy();
-        echo 'success';
-        exit;
-    } elseif (isset($_POST['changePass'])) {
-        $newPass = $_POST['newPass'] ?? '';
-        $hashedPass = password_hash($newPass, PASSWORD_DEFAULT);
-        $db->exec("UPDATE users SET password = '$hashedPass' WHERE username = '" . DEFAULT_USER . "'");
-        echo 'success';
-        exit;
-    } elseif (isset($_POST['toggleWiki'])) {
-        $_SESSION['useWikipedia'] = !$_SESSION['useWikipedia'];
-        echo $_SESSION['useWikipedia'] ? 'on' : 'off';
-        exit;
-    } elseif ($isLoggedIn && isset($_FILES['file']) && $_FILES['file']['error'] === UPLOAD_ERR_OK) {
-        $fileContent = file_get_contents($_FILES['file']['tmp_name']);
-        $url = 'uploaded_' . time();
-        $result = fetchWebContent($fileContent, $url, $db);
-        echo $result === true ? 'success' : ($result === 'duplicate' ? 'duplicate' : 'error');
-        exit;
-    } elseif ($isLoggedIn && isset($_POST['textInput'])) {
-        $text = trim($_POST['textInput']);
-        if ($text) {
-            $url = 'text_' . time();
-            $result = fetchWebContent($text, $url, $db);
+            exit;
+        } elseif (isset($_POST['changePass'])) {
+            $newPass = $_POST['newPass'] ?? '';
+            $hashedPass = password_hash($newPass, PASSWORD_DEFAULT);
+            $db->exec("UPDATE users SET password = '$hashedPass' WHERE username = '" . DEFAULT_USER . "'");
+            echo 'success';
+            exit;
+        } elseif (isset($_POST['toggleWiki'])) {
+            $_SESSION['useWikipedia'] = !$_SESSION['useWikipedia'];
+            echo $_SESSION['useWikipedia'] ? 'on' : 'off';
+            exit;
+        } elseif ($isLoggedIn && isset($_FILES['file']) && $_FILES['file']['error'] === UPLOAD_ERR_OK) {
+            $fileContent = file_get_contents($_FILES['file']['tmp_name']);
+            $url = 'uploaded_' . time();
+            $result = fetchWebContent($fileContent, $url, $db);
             echo $result === true ? 'success' : ($result === 'duplicate' ? 'duplicate' : 'error');
-        } else {
-            echo 'empty';
-        }
-        exit;
-    } elseif (isset($_POST['query'])) {
-        $query = trim($_POST['queryInput']);
-        $usedIds = json_decode($_POST['usedIds'] ?? '[]', true);
-        $moreAvailable = false;
-        $knowledgeId = null;
-        $answer = getAnswer($query, $db, $lang, $useWikipedia, $isLoggedIn, $moreAvailable, $knowledgeId, $usedIds);
-        $usedIds[] = $knowledgeId;
-        $response = '<div class="answer">' . $answer . '</div>';
-        if ($knowledgeId || stripos($answer, 'دانشم کافی نیست') === false) {
-            $response .= '<div class="feedback">' .
-                         '<button onclick="submitFeedback(' . ($knowledgeId ?: 0) . ', 1)">✓</button>';
-            if ($isLoggedIn) {
-                $response .= '<button onclick="showCorrection()">✗</button>' .
-                             '<div id="correctionBox" style="display:none; margin-top: 5px;">' .
-                             ($lang === 'fa' ? 'جواب درست: ' : 'Correct answer: ') .
-                             '<input type="text" id="correctAnswer">' .
-                             '<button onclick="submitCorrection()" style="width: 60px;">' . ($lang === 'fa' ? 'ثبت' : 'Save') . '</button></div>';
+            exit;
+        } elseif ($isLoggedIn && isset($_POST['textInput'])) {
+            $text = trim($_POST['textInput']);
+            if ($text) {
+                $url = 'text_' . time();
+                $result = fetchWebContent($text, $url, $db);
+                echo $result === true ? 'success' : ($result === 'duplicate' ? 'duplicate' : 'error');
+            } else {
+                echo 'empty';
             }
-            $response .= '</div>';
-        }
-        $response .= '<input type="hidden" id="usedIds" value=\'' . json_encode($usedIds) . '\'>';
-        echo $response;
-        exit;
-    } elseif (isset($_POST['more'])) {
-        $query = trim($_POST['queryInput']);
-        $usedIds = json_decode($_POST['usedIds'] ?? '[]', true);
-        $moreAvailable = false;
-        $knowledgeId = null;
-        $answer = getAnswer($query, $db, $lang, $useWikipedia, $isLoggedIn, $moreAvailable, $knowledgeId, $usedIds);
-        $usedIds[] = $knowledgeId;
-        $response = '<div class="answer">' . $answer . '</div>';
-        if ($knowledgeId || stripos($answer, 'دانشم کافی نیست') === false) {
-            $response .= '<div class="feedback">' .
-                         '<button onclick="submitFeedback(' . ($knowledgeId ?: 0) . ', 1)">✓</button>';
-            if ($isLoggedIn) {
-                $response .= '<button onclick="showCorrection()">✗</button>' .
-                             '<div id="correctionBox" style="display:none; margin-top: 5px;">' .
-                             ($lang === 'fa' ? 'جواب درست: ' : 'Correct answer: ') .
-                             '<input type="text" id="correctAnswer">' .
-                             '<button onclick="submitCorrection()" style="width: 60px;">' . ($lang === 'fa' ? 'ثبت' : 'Save') . '</button></div>';
+            exit;
+        } elseif (isset($_POST['query'])) {
+            $query = trim($_POST['queryInput']);
+            $usedIds = json_decode($_POST['usedIds'] ?? '[]', true);
+            $moreAvailable = false;
+            $knowledgeId = null;
+            $answer = getAnswer($query, $db, $lang, $useWikipedia, $isLoggedIn, $moreAvailable, $knowledgeId, $usedIds);
+            $usedIds[] = $knowledgeId;
+            $response = '<div class="answer">' . $answer . '</div>';
+            if ($knowledgeId || stripos($answer, 'دانشم کافی نیست') === false) {
+                $response .= '<div class="feedback">' .
+                             '<button onclick="submitFeedback(' . ($knowledgeId ?: 0) . ', 1)">✓</button>';
+                if ($isLoggedIn) {
+                    $response .= '<button onclick="showCorrection()">✗</button>' .
+                                 '<div id="correctionBox" style="display:none; margin-top: 5px;">' .
+                                 ($lang === 'fa' ? 'جواب درست: ' : 'Correct answer: ') .
+                                 '<input type="text" id="correctAnswer">' .
+                                 '<button onclick="submitCorrection()" style="width: 60px;">' . ($lang === 'fa' ? 'ثبت' : 'Save') . '</button></div>' .
+                                 '<br><br><button onclick="generateNewAnswer()" style="margin-left: 5px; width: 90px;">' . ($lang === 'fa' ? 'تولید جواب' : 'Generate Answer') . '</button>';
+                }
+                $response .= '</div>';
             }
-            $response .= '</div>';
-        }
-        $response .= '<input type="hidden" id="usedIds" value=\'' . json_encode($usedIds) . '\'>';
-        echo $response;
-        exit;
-    } elseif (isset($_POST['feedback'])) {
-        $knowledgeId = $_POST['knowledgeId'] ?? 0;
-        $rating = $_POST['rating'] ?? 0;
-        if ($knowledgeId) {
+            $response .= '<input type="hidden" id="usedIds" value=\'' . json_encode($usedIds) . '\'>';
+            echo $response;
+            exit;
+        } elseif (isset($_POST['more'])) {
+            $query = trim($_POST['queryInput']);
+            $usedIds = json_decode($_POST['usedIds'] ?? '[]', true);
+            $moreAvailable = false;
+            $knowledgeId = null;
+            $answer = getAnswer($query, $db, $lang, $useWikipedia, $isLoggedIn, $moreAvailable, $knowledgeId, $usedIds);
+            $usedIds[] = $knowledgeId;
+            $response = '<div class="answer">' . $answer . '</div>';
+            if ($knowledgeId || stripos($answer, 'دانشم کافی نیست') === false) {
+                $response .= '<div class="feedback">' .
+                             '<button onclick="submitFeedback(' . ($knowledgeId ?: 0) . ', 1)">✓</button>';
+                if ($isLoggedIn) {
+                    $response .= '<button onclick="showCorrection()">✗</button>' .
+                                 '<div id="correctionBox" style="display:none; margin-top: 5px;">' .
+                                 ($lang === 'fa' ? 'جواب درست: ' : 'Correct answer: ') .
+                                 '<input type="text" id="correctAnswer">' .
+                                 '<button onclick="submitCorrection()" style="width: 60px;">' . ($lang === 'fa' ? 'ثبت' : 'Save') . '</button></div>' .
+                                 '<br><button onclick="generateNewAnswer()" style="margin-left: 5px; width: 190px;">' . ($lang === 'fa' ? 'تولید جواب' : 'Generate Answer') . '</button>';
+                }
+                $response .= '</div>';
+            }
+            $response .= '<input type="hidden" id="usedIds" value=\'' . json_encode($usedIds) . '\'>';
+            echo $response;
+            exit;
+        } elseif (isset($_POST['feedback'])) {
+            $knowledgeId = $_POST['knowledgeId'] ?? 0;
+            $rating = $_POST['rating'] ?? 0;
+            if ($knowledgeId) {
+                $stmt = $db->prepare("INSERT INTO feedback (knowledge_id, rating) VALUES (:knowledge_id, :rating)");
+                $stmt->bindValue(':knowledge_id', $knowledgeId, SQLITE3_INTEGER);
+                $stmt->bindValue(':rating', $rating, SQLITE3_INTEGER);
+                $stmt->execute();
+            }
+            echo 'success';
+            exit;
+        } elseif ($isLoggedIn && isset($_POST['correction'])) {
+            $query = trim($_POST['queryInput']);
+            $correctAnswer = trim($_POST['correctAnswer']);
+            if ($correctAnswer) {
+                $stmt = $db->prepare("INSERT OR REPLACE INTO corrections (query, answer) VALUES (:query, :answer)");
+                $stmt->bindValue(':query', $query, SQLITE3_TEXT);
+                $stmt->bindValue(':answer', $correctAnswer, SQLITE3_TEXT);
+                $stmt->execute();
+                $url = 'correction_' . time();
+                fetchWebContent($correctAnswer, $url, $db);
+            }
+            echo 'success';
+            exit;
+        } elseif ($isLoggedIn && isset($_POST['generateAnswer'])) {
+            $query = trim($_POST['queryInput']);
+            $generated = generateText($query, $db, $lang);
+            if ($generated) {
+                $response = '<div class="answer">' . htmlspecialchars($generated) . ' [جدید]</div>' .
+                            '<div class="feedback">' .
+                            '<button onclick="saveGenerated(\'' . addslashes($generated) . '\', 1)">✓</button><br><br><hr>' .
+                            '</div>';
+                echo $response;
+            } else {
+                echo '<div class="answer">' . ($lang === 'fa' ? 'دیگه نمی‌تونم جواب جدیدی تولید کنم!' : 'I can’t generate any more new answers!') . '</div>';
+            }
+            exit;
+        } elseif ($isLoggedIn && isset($_POST['saveGenerated'])) {
+            $sentence = trim($_POST['sentence']);
+            $stmt = $db->prepare("INSERT INTO knowledge (page_id, sentence) VALUES (0, :sentence)");
+            $stmt->bindValue(':sentence', $sentence, SQLITE3_TEXT);
+            $stmt->execute();
+            $knowledgeId = $db->lastInsertRowID();
+
+            $words = preg_split('/\s+/', $sentence);
+            $uniqueWords = [];
+            foreach ($words as $word) {
+                $word = trim($word, ".,!?");
+                if (strlen($word) > 2) {
+                    $uniqueWords[$word] = true;
+                    $stmt = $db->prepare("INSERT OR IGNORE INTO word_index (word, knowledge_id) VALUES (:word, :knowledge_id)");
+                    $stmt->bindValue(':word', $word, SQLITE3_TEXT);
+                    $stmt->bindValue(':knowledge_id', $knowledgeId, SQLITE3_INTEGER);
+                    $stmt->execute();
+                    $stmt = $db->prepare("UPDATE word_index SET frequency = frequency + 1 WHERE word = :word AND knowledge_id = :knowledge_id");
+                    $stmt->bindValue(':word', $word, SQLITE3_TEXT);
+                    $stmt->bindValue(':knowledge_id', $knowledgeId, SQLITE3_INTEGER);
+                    $stmt->execute();
+                }
+            }
+
+            $wordList = array_keys($uniqueWords);
+            for ($i = 0; $i < count($wordList); $i++) {
+                for ($j = $i + 1; $j < count($wordList); $j++) {
+                    $word1 = $wordList[$i] < $wordList[$j] ? $wordList[$i] : $wordList[$j];
+                    $word2 = $wordList[$i] < $wordList[$j] ? $wordList[$j] : $wordList[$i];
+                    $stmt = $db->prepare("INSERT OR IGNORE INTO co_occurrences (word1, word2, count) VALUES (:word1, :word2, 0)");
+                    $stmt->bindValue(':word1', $word1, SQLITE3_TEXT);
+                    $stmt->bindValue(':word2', $word2, SQLITE3_TEXT);
+                    $stmt->execute();
+                    $stmt = $db->prepare("UPDATE co_occurrences SET count = count + 1 WHERE word1 = :word1 AND word2 = :word2");
+                    $stmt->bindValue(':word1', $word1, SQLITE3_TEXT);
+                    $stmt->bindValue(':word2', $word2, SQLITE3_TEXT);
+                    $stmt->execute();
+                }
+            }
+
             $stmt = $db->prepare("INSERT INTO feedback (knowledge_id, rating) VALUES (:knowledge_id, :rating)");
             $stmt->bindValue(':knowledge_id', $knowledgeId, SQLITE3_INTEGER);
-            $stmt->bindValue(':rating', $rating, SQLITE3_INTEGER);
+            $stmt->bindValue(':rating', 1, SQLITE3_INTEGER);
             $stmt->execute();
+            echo 'success';
+            exit;
+        } elseif ($isLoggedIn && isset($_POST['getCoOccurrences'])) {
+            $coOffset = (int)$_POST['coOffset'];
+            $coLimit = 5;
+            $data = getTopCoOccurrences($db, $coLimit, $coOffset);
+            $response = '';
+            if (empty($data['data'])) {
+                $response .= '<p>' . ($lang === 'fa' ? 'هم‌رخدادی دیگری وجود ندارد.' : 'No more co-occurrences.') . '</p>';
+            } else {
+                foreach ($data['data'] as $pair => $count) {
+                    $response .= '<p>' . htmlspecialchars($pair) . ': ' . $count . '</p>';
+                }
+            }
+            $response .= '<input type="hidden" id="currentCoOffset" value="' . ($coOffset) . '">';
+            $response .= '<input type="hidden" id="coTotal" value="' . $data['total'] . '">';
+            echo $response;
+            exit;
+        } elseif ($isLoggedIn && isset($_POST['resetGenerated'])) {
+            unset($_SESSION['generated_answers']);
+            echo 'success';
+            exit;
         }
-        echo 'success';
-        exit;
-    } elseif ($isLoggedIn && isset($_POST['correction'])) {
-        $query = trim($_POST['queryInput']);
-        $correctAnswer = trim($_POST['correctAnswer']);
-        if ($correctAnswer) {
-            $stmt = $db->prepare("INSERT OR REPLACE INTO corrections (query, answer) VALUES (:query, :answer)");
-            $stmt->bindValue(':query', $query, SQLITE3_TEXT);
-            $stmt->bindValue(':answer', $correctAnswer, SQLITE3_TEXT);
-            $stmt->execute();
-            $url = 'correction_' . time();
-            fetchWebContent($correctAnswer, $url, $db);
-        }
-        echo 'success';
+    } catch (Exception $e) {
+        echo 'error';
         exit;
     }
 }
 ?>
+
 
 <!DOCTYPE html>
 <html lang="<?= $lang ?>" dir="<?= $lang === 'fa' ? 'rtl' : 'ltr' ?>">
@@ -448,24 +693,25 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     <link rel="shortcut icon" href="https://cdn.sstatic.net/Sites/stackoverflow/Img/favicon.ico">
     <link href="https://fonts.googleapis.com/css2?family=Vazirmatn:wght@300;400;700&display=swap" rel="stylesheet">
     <style>
-        /* متغیرهای اصلی برای تم‌ها */
+        /* استایل‌ها بدون تغییر باقی می‌مونن */
         :root {
             --dark-bg: #1e2a44;
             --dark-frame: #2c3e50;
             --dark-accent: #8e44ad;
-            --dark-text: #e0e0e0;
+            --dark-text:rgb(194, 213, 214);
             --button: #4d0099;
             --button-hover: #4d0099;
             --light-bg: #ecf0f1;
             --light-frame: #ffffff;
             --light-accent: #9b59b6;
             --light-text: #2c3e50;
-            --light-button: #8e44ad;
+            --light-button:rgb(142, 190, 205);
             --light-button-hover: #4d0099;
             --shadow: 0 4px 10px rgba(0, 0, 0, 0.2);
             --radius: 8px;
             --transition: all 0.3s ease;
         }
+
 
         * {
             margin: 0;
@@ -572,7 +818,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
 
         select {
             background: var(--button);
-            color: white;
+            color: #808080;
             margin-<?= $lang === 'fa' ? 'left' : 'right' ?>: 15px;
         }
 
@@ -791,6 +1037,29 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             color: #87ceeb;
             transition: var(--transition);
         }
+
+        .progress-footer {
+            background: var(--dark-frame);
+            padding: 10px;
+            border-radius: var(--radius);
+            margin-top: 10px;
+            font-size: 14px;
+            text-align: center;
+            width: 100%;
+        }
+
+        body.light .progress-footer {
+            background: var(--light-frame);
+        }
+
+        .progress-footer h3 {
+            font-size: 16px;
+            margin-bottom: 8px;
+        }
+
+        .progress-footer p {
+            margin: 5px 0;
+        }
     </style>
 </head>
 <body>
@@ -830,45 +1099,77 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             <div class="token-box"><?= $lang === 'fa' ? "توکن‌ها: $tokenCount" : "Tokens: $tokenCount" ?></div>
         </div>
         <?php if ($isLoggedIn): ?>
-            <div class="section">
-                <form id="uploadForm" enctype="multipart/form-data">
-                    <input type="file" name="file" id="fileInput" accept=".txt,.html"><br><br>
-                    <button type="button" class="fetch-button" onclick="fetchContent()"><?= $lang === 'fa' ? 'دریافت اطلاعات' : 'Fetch Data' ?></button>
-                </form>
-                <div id="fetchResponse" class="response"><?= $lang === 'fa' ? 'نتیجه اینجا ظاهر می‌شود' : 'Result will appear here' ?></div>
-            </div>
+
             <div class="section">
                 <textarea id="textInput" placeholder="<?= $lang === 'fa' ? 'متن رو اینجا بنویس...' : 'Write text here...' ?>" rows="3"></textarea>
                 <button class="fetch-button" onclick="submitText()"><?= $lang === 'fa' ? 'ارسال متن' : 'Submit Text' ?></button>
                 <div id="textResponse" class="response"><?= $lang === 'fa' ? 'نتیجه اینجا ظاهر می‌شود' : 'Result will appear here' ?></div>
             </div>
+
+            <div class="section">
+                <form id="uploadForm" enctype="multipart/form-data"><br>
+                    <input type="file" name="file" id="fileInput" accept=".txt,.html"  style="width: 50%">
+                    <button type="button" class="fetch-button" onclick="fetchContent()"><?= $lang === 'fa' ? 'دریافت اطلاعات' : 'Fetch Data' ?></button>
+                </form>
+                <div id="fetchResponse" class="response"><?= $lang === 'fa' ? 'نتیجه اینجا ظاهر می‌شود' : 'Result will appear here' ?></div>
+            </div>
+
         <?php endif; ?>
 
         <div class="chat-section">
             <div class="container1">
                 <div class="chat-box">
-                    <input value=" " id="queryInput" type="text" placeholder="<?= $lang === 'fa' ? 'سوال خود را بپرسید' : 'Ask your question' ?>" autocomplete="off">
-                    <button class="send-btn" onclick="getResponse()" style="width:40px;">
+                    <input value="&nbsp;" id="queryInput" type="text" placeholder="<?= $lang === 'fa' ? 'سوال خود را بپرسید' : 'Ask your question' ?>" autocomplete="off">
+                    <button class="send-btn" onclick="getResponse()" style="width:50px;">
                         <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="var(--dark-text)"><path d="M22 2L11 13M22 2l-7 20-4-9-9-4 20-7z"/></svg>
                     </button>
-                    <button class="send-btn" onclick="toggleWiki()" title="Wikipedia" style="width:30px;">
-                        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="<?= $useWikipedia ? '#00cc00' : 'var(--dark-text)' ?>">
-                            <path d="M12 2a10 10 0 110 20 10 10 0 010-20zm0 2a8 8 0 100 16 8 8 0 000-16zm-1 3v6l4 2-1 2-5-2V7h2z"/>
+
+                    <!-- 
+
+                    <button class="send-btn" onclick="toggleWiki()" title="Wikipedia" style="width:40px;background-color:#065465;">                    
+                        <svg  fill="#000000" width="16px" height="16px"  viewBox="0 0 8 8" stroke="<?= $useWikipedia ? '#00cc00' : '#A9A9A9' ?>">
+                        <path d="M3.75 0c-1.38 0-2.66.4-3.75 1.09l.53.81c.93-.59 2.03-.91 3.22-.91 1.2 0 2.32.31 3.25.91l.53-.81c-1.09-.7-2.4-1.09-3.78-1.09zm0 3c-.79 0-1.5.23-2.13.63l.53.84c.47-.3 1-.47 1.59-.47.59 0 1.16.17 1.63.47l.53-.84c-.62-.39-1.37-.63-2.16-.63zm0 3c-.55 0-1 .45-1 1s.45 1 1 1 1-.45 1-1-.45-1-1-1z" />
                         </svg>
-                    </button>
+                    </button> 
+                    
+                    -->
+
                 </div>
                 <div id="response" class="response"><?= $lang === 'fa' ? 'پاسخ اینجا ظاهر می‌شود' : 'Response will appear here' ?></div>
+                <?php if ($isLoggedIn): ?>
+                    <div class="progress-footer">
+                        <h3><?= $lang === 'fa' ? 'آمار پیشرفت' : 'Progress Statistics' ?></h3>
+                        <p><?= $lang === 'fa' ? "تعداد جملات ذخیره‌شده: $currentSentenceCount" : "Stored Sentences: $currentSentenceCount" ?></p>
+                        <p><?= $lang === 'fa' ? "تعداد رابطه های تولیدشده: $ngramCount" : "Generated N-grams: $ngramCount" ?></p>
+                        <h3><?= $lang === 'fa' ? 'پرتکرارترین هم‌رخدادی‌ها' : 'Top Co-occurrences' ?></h3>
+                        <div id="coOccurrencesList">
+                            <?php if (empty($topCoOccurrences)): ?>
+                                <p><?= $lang === 'fa' ? 'هنوز هم‌رخدادی وجود ندارد.' : 'No co-occurrences yet.' ?></p>
+                            <?php else: ?>
+                                <?php foreach ($topCoOccurrences as $pair => $count): ?>
+                                    <p><?= htmlspecialchars($pair) ?>: <?= $count ?></p>
+                                <?php endforeach; ?>
+                            <?php endif; ?>
+                        </div>
+                        <div style="margin-top: 10px;">
+                            <button class="send-btn" onclick="prevCoOccurrences()" style="width: 40px;"> < </button>
+                            <button class="send-btn" onclick="nextCoOccurrences()" style="width: 40px;"> > </button>
+                            <input type="hidden" id="currentCoOffset" value="0">
+                            <input type="hidden" id="coTotal" value="<?= $coTotal ?>">
+                        </div>
+                    </div>
+                <?php endif; ?>
             </div>
         </div>
         <div id="loginModal" class="modal" onclick="closeModal(event)">
             <div class="modal-content">
                 <h2><?= $lang === 'fa' ? 'ورود' : 'Login' ?></h2>
-                <input id="username" type="text" placeholder="<?= $lang === 'fa' ? 'نام کاربری' : 'Username' ?>" autocomplete="new-username">
-                <input id="password" type="password" placeholder="<?= $lang === 'fa' ? 'رمز عبور' : 'Password' ?>" autocomplete="new-password">
+                <input id="username" type="text" placeholder="<?= $lang === 'fa' ? 'نام کاربری' : 'Username' ?>" autocomplete="off">
+                <input id="password" type="password" placeholder="<?= $lang === 'fa' ? 'رمز عبور' : 'Password' ?>" autocomplete="off">
                 <button onclick="login()"><?= $lang === 'fa' ? 'ورود' : 'Login' ?></button>
                 <?php if ($isLoggedIn): ?>
                     <h2><?= $lang === 'fa' ? 'تغییر رمز' : 'Change Password' ?></h2>
-                    <input id="newPass" type="password" placeholder="<?= $lang === 'fa' ? 'رمز جدید' : 'New Password' ?>" autocomplete="new-password">
+                    <input id="newPass" type="password" placeholder="<?= $lang === 'fa' ? 'رمز جدید' : 'New Password' ?>" autocomplete="off">
                     <button onclick="changePass()"><?= $lang === 'fa' ? 'تغییر' : 'Change' ?></button>
                 <?php endif; ?>
             </div>
@@ -980,18 +1281,19 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         }
         function submitFeedback(knowledgeId, rating) {
             fetch('', {
+
+
+
                 method: 'POST',
                 headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
                 body: 'feedback=true&knowledgeId=' + knowledgeId + '&rating=' + rating
             }).then(response => response.text()).then(data => {
-                if (data === 'success') {
-                    alert('<?= $lang === 'fa' ? 'نظر شما ثبت شد!' : 'Feedback submitted!' ?>');
-                    document.querySelector('.feedback').style.display = 'none';
-                }
+                if (data === 'success') alert('<?= $lang === 'fa' ? 'بازخورد ثبت شد!' : 'Feedback submitted!' ?>');
             });
         }
         function showCorrection() {
-            document.getElementById('correctionBox').style.display = 'block';
+            const correctionBox = document.getElementById('correctionBox');
+            correctionBox.style.display = correctionBox.style.display === 'none' ? 'block' : 'none';
         }
         function submitCorrection() {
             const query = document.getElementById('queryInput').value.trim();
@@ -1003,24 +1305,110 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 body: 'correction=true&queryInput=' + encodeURIComponent(query) + '&correctAnswer=' + encodeURIComponent(correctAnswer)
             }).then(response => response.text()).then(data => {
                 if (data === 'success') {
-                    alert('<?= $lang === 'fa' ? 'جواب درست ثبت شد!' : 'Correct answer saved!' ?>');
-                    document.getElementById('correctionBox').style.display = 'none';
+                    alert('<?= $lang === 'fa' ? 'تصحیح ثبت شد!' : 'Correction saved!' ?>');
                     getResponse();
                 }
             });
         }
+        function generateNewAnswer() {
+            const query = document.getElementById('queryInput').value.trim();
+            const responseDiv = document.getElementById('response');
+            fetch('', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+                body: 'generateAnswer=true&queryInput=' + encodeURIComponent(query)
+            }).then(response => response.text()).then(data => {
+                responseDiv.innerHTML += data; // اضافه کردن جواب جدید به لیست موجود
+            });
+        }
+        function saveGenerated(sentence, rating) {
+            fetch('', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+                body: 'saveGenerated=true&sentence=' + encodeURIComponent(sentence) + '&rating=' + rating
+            }).then(response => response.text()).then(data => {
+                if (data === 'success') {
+                    alert('<?= $lang === 'fa' ? 'جواب تولیدشده ذخیره شد!' : 'Generated answer saved!' ?>');
+                    getResponse();
+                }
+            });
+        }
+        function resetGeneratedAnswers() {
+            fetch('', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+                body: 'resetGenerated=true'
+            }).then(response => response.text()).then(data => {
+                if (data === 'success') {
+                    alert('<?= $lang === 'fa' ? 'جواب‌های قبلی بازنشانی شدند!' : 'Previous answers have been reset!' ?>');
+                    generateNewAnswer();
+                }
+            });
+        }
+        function prevCoOccurrences() {
+            let currentOffset = parseInt(document.getElementById('currentCoOffset').value);
+            const coTotal = parseInt(document.getElementById('coTotal').value);
+            const limit = 5;
+            if (currentOffset <= 0) return;
+            currentOffset -= limit;
+            fetchCoOccurrences(currentOffset);
+        }
+        function nextCoOccurrences() {
+            let currentOffset = parseInt(document.getElementById('currentCoOffset').value);
+            const coTotal = parseInt(document.getElementById('coTotal').value);
+            const limit = 5;
+            if (currentOffset + limit >= coTotal) return;
+            currentOffset += limit;
+            fetchCoOccurrences(currentOffset);
+        }
+        function fetchCoOccurrences(offset) {
+            fetch('', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+                body: 'getCoOccurrences=true&coOffset=' + offset
+            }).then(response => response.text()).then(data => {
+                document.getElementById('coOccurrencesList').innerHTML = data;
+            });
+        }
         function toggleTheme() {
             document.body.classList.toggle('light');
-            localStorage.setItem('theme', document.body.classList.contains('light') ? 'light' : 'dark');
-            const logoIcon = document.getElementById('logo-icon');
-            if (document.body.classList.contains('light')) {
-                logoIcon.querySelector('g').setAttribute('fill', '#2c3e50');
-            } else {
-                logoIcon.querySelector('g').setAttribute('fill', '#e0e0e0');
+            const theme = document.body.classList.contains('light') ? 'light' : 'dark';
+            localStorage.setItem('theme', theme);
+            updateSVGs(theme);
+        }
+        function updateSVGs(theme) {
+            const svgs = document.querySelectorAll('svg');
+            svgs.forEach(svg => {
+                const paths = svg.querySelectorAll('path');
+                paths.forEach(path => {
+                    if (theme === 'light') {
+                        path.setAttribute('stroke', 'var(--light-text)');
+                        if (svg.closest('#logo-icon')) {
+                            path.setAttribute('fill', '#2c3e50');
+                        }
+                    } else {
+                        path.setAttribute('stroke', 'var(--dark-text)');
+                        if (svg.closest('#logo-icon')) {
+                            path.setAttribute('fill', '#e0e0e0');
+                        }
+                    }
+                });
+            });
+            const wikiSvg = document.querySelector('button[title="Wikipedia"] svg');
+            if (wikiSvg) {
+                wikiSvg.querySelector('path').setAttribute('stroke', '<?= $useWikipedia ? '#00cc00' : (isset($_GET['theme']) && $_GET['theme'] === 'light' ? 'var(--light-text)' : 'var(--dark-text)') ?>');
             }
         }
-        if (localStorage.getItem('theme') === 'light') document.body.classList.add('light');
-        else if (!localStorage.getItem('theme')) localStorage.setItem('theme', 'dark');
+        document.addEventListener('DOMContentLoaded', () => {
+            const savedTheme = localStorage.getItem('theme');
+            if (savedTheme === 'light') {
+                document.body.classList.add('light');
+            }
+            updateSVGs(savedTheme || 'dark');
+            document.getElementById('queryInput').addEventListener('keypress', function(e) {
+                if (e.key === 'Enter') getResponse();
+            });
+        });
     </script>
 </body>
 </html>
