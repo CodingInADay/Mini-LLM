@@ -18,9 +18,18 @@ try {
     $db->exec("CREATE TABLE IF NOT EXISTS users (id INTEGER PRIMARY KEY AUTOINCREMENT, username TEXT NOT NULL UNIQUE, password TEXT NOT NULL)");
     $db->exec("CREATE TABLE IF NOT EXISTS qa (id INTEGER PRIMARY KEY AUTOINCREMENT, question TEXT, answer TEXT, rating INTEGER DEFAULT 0)");
     $db->exec("CREATE TABLE IF NOT EXISTS feedback (id INTEGER PRIMARY KEY AUTOINCREMENT, qa_id INTEGER, rating INTEGER, FOREIGN KEY(qa_id) REFERENCES qa(id))");
-    $db->exec("CREATE TABLE IF NOT EXISTS markov_chain (id INTEGER PRIMARY KEY AUTOINCREMENT, word1 TEXT, word2 TEXT, count INTEGER DEFAULT 1)");
+    // جدول موقت با ساختار جدید (محدودیت یکتا روی word1 و word2)
+    $db->exec("CREATE TABLE IF NOT EXISTS markov_chain_temp (id INTEGER PRIMARY KEY AUTOINCREMENT, word1 TEXT, word2 TEXT, count INTEGER DEFAULT 1, UNIQUE(word1, word2))");
+    // انتقال داده‌ها از جدول قدیمی به جدول جدید (اگه جدول قدیمی وجود داشته باشه)
+    $db->exec("INSERT OR IGNORE INTO markov_chain_temp (id, word1, word2, count) SELECT id, word1, word2, count FROM markov_chain");
+    // حذف جدول قدیمی (اگه وجود داشته باشه)
+    $db->exec("DROP TABLE IF EXISTS markov_chain");
+    // تغییر نام جدول موقت به جدول اصلی
+    $db->exec("ALTER TABLE markov_chain_temp RENAME TO markov_chain");
+    $db->exec("CREATE TABLE IF NOT EXISTS markov_status (id INTEGER PRIMARY KEY, needs_rebuild INTEGER DEFAULT 1)");
     $db->exec("CREATE INDEX IF NOT EXISTS idx_question ON qa(question)");
     $db->exec("CREATE INDEX IF NOT EXISTS idx_word1 ON markov_chain(word1)");
+    $db->exec("CREATE INDEX IF NOT EXISTS idx_word1_word2 ON markov_chain(word1, word2)");
 } catch (Exception $e) {
     die("Table creation error: " . $e->getMessage());
 }
@@ -31,8 +40,12 @@ try {
         $hashedPass = password_hash(DEFAULT_PASS, PASSWORD_DEFAULT);
         $db->exec("INSERT INTO users (username, password) VALUES ('" . DEFAULT_USER . "', '" . $hashedPass . "')");
     }
+    $count = $db->querySingle("SELECT COUNT(*) FROM markov_status");
+    if ($count == 0) {
+        $db->exec("INSERT INTO markov_status (id, needs_rebuild) VALUES (1, 1)");
+    }
 } catch (Exception $e) {
-    die("Initial user creation error: " . $e->getMessage());
+    die("Initial setup error: " . $e->getMessage());
 }
 
 session_start();
@@ -47,35 +60,65 @@ function calculateSimilarity($query, $text) {
 }
 
 function buildMarkovChain($db) {
+    $db->exec("UPDATE markov_status SET needs_rebuild = 0 WHERE id = 1");
     $db->exec("DELETE FROM markov_chain");
     $result = $db->query("SELECT answer FROM qa");
+    
+    $db->exec("BEGIN TRANSACTION");
     while ($row = $result->fetchArray(SQLITE3_ASSOC)) {
-        $words = array_values(array_filter(preg_split('/\s+/', $row['answer']), fn($word) => strlen($word) > 2));
+        $text = $row['answer'];
+        $text = preg_replace('/([،؛.!؟])(?=\S|$)/u', '$1 ', $text);
+        $text = preg_replace('/\x{200C}/u', ' ', $text);
+        $tokens = array_values(array_filter(preg_split('/\s+/', $text), fn($token) => strlen($token) > 0));
+        
+        $words = [];
+        foreach ($tokens as $token) {
+            if (preg_match('/^[،؛.!؟]$/u', $token) || strlen($token) > 2) {
+                $words[] = $token;
+            }
+        }
+
         for ($i = 0; $i < count($words) - 1; $i++) {
             $word1 = $words[$i];
             $word2 = $words[$i + 1];
-            $stmt = $db->prepare("INSERT OR IGNORE INTO markov_chain (word1, word2, count) VALUES (:word1, :word2, 0)");
+            $stmt = $db->prepare("INSERT INTO markov_chain (word1, word2, count) VALUES (:word1, :word2, 1) ON CONFLICT(word1, word2) DO UPDATE SET count = count + 1");
             $stmt->bindValue(':word1', $word1, SQLITE3_TEXT);
             $stmt->bindValue(':word2', $word2, SQLITE3_TEXT);
             $stmt->execute();
-            $db->exec("UPDATE markov_chain SET count = count + 1 WHERE word1 = '$word1' AND word2 = '$word2'");
         }
     }
+    $db->exec("COMMIT");
 }
 
 function generateCreativeAnswer($db, $lang, $question = '', $minLength = 3, $maxLength = 10) {
-    buildMarkovChain($db);
+    $needsRebuild = $db->querySingle("SELECT needs_rebuild FROM markov_status WHERE id = 1");
+    if ($needsRebuild) {
+        buildMarkovChain($db);
+    }
 
-    $questionWords = array_values(array_filter(preg_split('/\s+/', $question), fn($word) => strlen($word) > 2));
-    
+    $question = preg_replace('/([،؛.!؟])(?=\S|$)/u', '$1 ', $question);
+    $question = preg_replace('/\x{200C}/u', ' ', $question);
+    $questionWords = array_values(array_filter(preg_split('/\s+/', $question), fn($word) => strlen($word) > 2 || preg_match('/^[،؛.!؟]$/u', $word)));
+
+    static $markovCache = null;
+    if ($markovCache === null) {
+        $markovCache = [];
+        $result = $db->query("SELECT word1, word2, count FROM markov_chain");
+        while ($row = $result->fetchArray(SQLITE3_ASSOC)) {
+            $word1 = $row['word1'];
+            $word2 = $row['word2'];
+            $count = $row['count'];
+            if (!isset($markovCache[$word1])) {
+                $markovCache[$word1] = [];
+            }
+            $markovCache[$word1][] = ['word2' => $word2, 'count' => $count];
+        }
+    }
+
     $startingWord = null;
     if (!empty($questionWords)) {
         foreach ($questionWords as $word) {
-            $stmt = $db->prepare("SELECT word1 FROM markov_chain WHERE word1 = :word1 LIMIT 1");
-            $stmt->bindValue(':word1', $word, SQLITE3_TEXT);
-            $result = $stmt->execute();
-            $row = $result->fetchArray(SQLITE3_ASSOC);
-            if ($row) {
+            if (isset($markovCache[$word])) {
                 $startingWord = $word;
                 break;
             }
@@ -83,44 +126,47 @@ function generateCreativeAnswer($db, $lang, $question = '', $minLength = 3, $max
     }
 
     if (!$startingWord) {
-        $result = $db->query("SELECT word1 FROM markov_chain ORDER BY RANDOM() LIMIT 1");
-        $row = $result->fetchArray(SQLITE3_ASSOC);
-        if (!$row) return $lang === 'fa' ? 'نمی‌تونم چیزی جدید بسازم!' : 'Can’t create anything new!';
-        $startingWord = $row['word1'];
+        $words = array_keys($markovCache);
+        if (empty($words)) return $lang === 'fa' ? 'نمی‌تونم چیزی جدید بسازم!' : 'Can’t create anything new!';
+        $startingWord = $words[array_rand($words)];
     }
 
     $words = [];
     $currentWord = $startingWord;
     $words[] = $currentWord;
+    $usedWords = [$currentWord];
 
     for ($i = 0; $i < $maxLength - 1; $i++) {
-        $stmt = $db->prepare("SELECT word2, count FROM markov_chain WHERE word1 = :word1");
-        $stmt->bindValue(':word1', $currentWord, SQLITE3_TEXT);
-        $result = $stmt->execute();
-        
-        $candidates = [];
+        if (!isset($markovCache[$currentWord])) break;
+
+        $candidates = $markovCache[$currentWord];
         $totalCount = 0;
-        while ($row = $result->fetchArray(SQLITE3_ASSOC)) {
-            $candidates[] = [
-                'word2' => $row['word2'],
-                'count' => $row['count']
-            ];
-            $totalCount += $row['count'];
+        foreach ($candidates as $candidate) {
+            $totalCount += $candidate['count'];
         }
 
-        if (empty($candidates)) break;
+        if ($totalCount == 0) break;
 
         $rand = mt_rand(1, $totalCount);
         $cumulative = 0;
+        $nextWord = null;
         foreach ($candidates as $candidate) {
             $cumulative += $candidate['count'];
             if ($rand <= $cumulative) {
-                $currentWord = $candidate['word2'];
+                $nextWord = $candidate['word2'];
                 break;
             }
         }
 
+        if ($nextWord === null || in_array($nextWord, $usedWords)) {
+            $unusedWords = array_diff(array_keys($markovCache), $usedWords);
+            if (empty($unusedWords)) break;
+            $nextWord = $unusedWords[array_rand($unusedWords)];
+        }
+
+        $currentWord = $nextWord;
         $words[] = $currentWord;
+        $usedWords[] = $currentWord;
 
         if (count($words) >= $minLength && mt_rand(0, 1) == 1) {
             break;
@@ -128,13 +174,16 @@ function generateCreativeAnswer($db, $lang, $question = '', $minLength = 3, $max
     }
 
     while (count($words) < $minLength) {
-        $result = $db->query("SELECT word1 FROM markov_chain ORDER BY RANDOM() LIMIT 1");
-        $row = $result->fetchArray(SQLITE3_ASSOC);
-        if (!$row) break;
-        $words[] = $row['word1'];
+        $unusedWords = array_diff(array_keys($markovCache), $usedWords);
+        if (empty($unusedWords)) break;
+        $nextWord = $unusedWords[array_rand($unusedWords)];
+        $words[] = $nextWord;
+        $usedWords[] = $nextWord;
     }
 
-    return implode(' ', $words) ?: ($lang === 'fa' ? 'نمی‌تونم چیزی جدید بسازم!' : 'Can’t create anything new!');
+    $sentence = implode(' ', $words);
+    $sentence = preg_replace('/\s+([،؛.!؟])/u', '$1', $sentence);
+    return $sentence ?: ($lang === 'fa' ? 'نمی‌تونم چیزی جدید بسازم!' : 'Can’t create anything new!');
 }
 
 function getAnswer($query, $db, $lang, $usedIds = [], &$knowledgeId = null, &$moreAvailable = false) {
@@ -217,7 +266,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             $stmt->bindValue(':question', $question, SQLITE3_TEXT);
             $stmt->bindValue(':answer', $answer, SQLITE3_TEXT);
             $stmt->execute();
-            buildMarkovChain($db);
+            $db->exec("UPDATE markov_status SET needs_rebuild = 1 WHERE id = 1");
             echo 'success';
             exit;
         } elseif (isset($_POST['generate']) && $isLoggedIn) {
@@ -231,7 +280,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             $stmt->bindValue(':question', $question, SQLITE3_TEXT);
             $stmt->bindValue(':answer', $answer, SQLITE3_TEXT);
             $stmt->execute();
-            buildMarkovChain($db);
+            $db->exec("UPDATE markov_status SET needs_rebuild = 1 WHERE id = 1");
             echo 'success';
             exit;
         } elseif (isset($_POST['query'])) {
@@ -614,15 +663,17 @@ $stats = getStats($db);
                     </button>
                 <?php endif; ?>
             </div>
-        </div><form onsubmit="event.preventDefault();">
+        </div>
+        <form onsubmit="event.preventDefault();">
         <div class="chat-box">
             <input id="queryInput" type="text" placeholder="<?= $lang === 'fa' ? 'سوال خود را بپرسید...' : 'Ask your question...' ?>" autocomplete="off">
             <button onclick="sendQuery()">
                 <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="white">
                     <path d="M22 2L11 13M22 2l-7 20-4-9-9-4 20-7z"/>
                 </svg>
-            </button></form>
+            </button>
         </div>
+        </form>
         <div class="chat-messages" id="chatMessages"></div>
         <?php if ($isLoggedIn): ?>
             <div class="admin-section">
